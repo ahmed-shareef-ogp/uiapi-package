@@ -1,1 +1,14 @@
-{"table":{"headers":"on","filters":"on","pagination":"on","datalink":"on","button":["create","edit","delete"],"actions":[{"type":"create","label":"Create"},{"type":"edit","label":"Edit"},{"type":"delete","label":"Delete"}]}}
+{
+  "table": {
+    "headers": "on",
+    "filters": "on",
+    "pagination": "on",
+    "datalink": "on",
+    "button": ["create", "edit", "delete"],
+    "actions": [
+      { "type": "create", "label": "Create" },
+      { "type": "edit", "label": "Edit" },
+      { "type": "delete", "label": "Delete" }
+    ]
+  }
+}

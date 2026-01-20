@@ -1,1 +1,23 @@
-{"filterSection":{"filters":"on","button":["apply","reset"]}}
+{
+    "filterSection": {
+        "buttons": [
+            {
+                "type": "submit",
+                "color": "primary",
+                "prependIcon": "magnifying-glass",
+                "variant": "contained"
+            },
+            {
+                "type": "Clear",
+                "label": "Clear",
+                "color": "secondary"
+            },
+            {
+                "type": "Close",
+                "label": "Close",
+                "color": "gray"
+            }
+        ],
+        "filters": "on"
+    }
+}

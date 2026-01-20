@@ -748,6 +748,39 @@ class ComponentConfigService
     protected function applyOverridesToSection(array $sectionPayload, array $overrides, string $lang): array
     {
         foreach ($overrides as $overrideKey => $overrideVal) {
+            // Handle string overrides generically for any key
+            if (is_string($overrideVal)) {
+                $targetKey = $overrideKey;
+                if (! array_key_exists($targetKey, $sectionPayload)) {
+                    $candidates = [];
+                    $plural = Str::plural($overrideKey);
+                    $singular = Str::singular($overrideKey);
+                    foreach ([$plural, $singular] as $cand) {
+                        if (is_string($cand) && $cand !== $overrideKey) {
+                            $candidates[] = $cand;
+                        }
+                    }
+                    foreach ($candidates as $cand) {
+                        if (array_key_exists($cand, $sectionPayload)) {
+                            $targetKey = $cand;
+                            break;
+                        }
+                    }
+                }
+
+                if (strtolower($overrideVal) === 'off') {
+                    if (array_key_exists($targetKey, $sectionPayload)) {
+                        unset($sectionPayload[$targetKey]);
+                    }
+                    if ($targetKey !== $overrideKey && array_key_exists($overrideKey, $sectionPayload)) {
+                        unset($sectionPayload[$overrideKey]);
+                    }
+                } else {
+                    $sectionPayload[$targetKey] = $overrideVal;
+                }
+
+                continue;
+            }
             if (! is_array($overrideVal)) {
                 continue;
             }
