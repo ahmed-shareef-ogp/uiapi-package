@@ -1,11 +1,11 @@
 <?php
 namespace Ogp\UiApi\Services;
 
-use Illuminate\Support\Str;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\File;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class ComponentConfigService
 {
@@ -13,10 +13,16 @@ class ComponentConfigService
     protected bool $includeTopLevelHeaders        = false;
     protected bool $includeTopLevelFilters        = false;
     protected bool $includeTopLevelPagination     = false;
+    protected bool $loggingEnabled                = false;
 
     public function __construct()
     {
         $this->setIncludeHiddenColumnsInHeaders(false);
+        // Read logging flag safely without triggering missing-config exceptions
+        $cfg = config('uiapi');
+        $this->loggingEnabled = is_array($cfg) && array_key_exists('logging_enabled', $cfg)
+            ? (bool) $cfg['logging_enabled']
+            : false;
     }
 
     public function setIncludeHiddenColumnsInHeaders(bool $value): void
@@ -39,11 +45,26 @@ class ComponentConfigService
         return $this->includeTopLevelPagination;
     }
 
+    public function setLoggingEnabled(bool $enabled): void
+    {
+        $this->loggingEnabled = $enabled;
+    }
+
+    protected function isLoggingEnabled(): bool
+    {
+        return $this->loggingEnabled === true;
+    }
+
+    protected function logDebug(string $message, array $context = []): void
+    {
+        if ($this->isLoggingEnabled()) {
+            Log::debug($message, $context);
+        }
+    }
+
     protected function resolveModel(string $modelName): ?array
     {
-        Log::debug('Resolving model', [
-            'method' => __METHOD__,
-        ]);
+        $this->logDebug('Entering resolveModel', ['method' => __METHOD__, 'model' => $modelName]);
 
         // Prefer package model, fallback to app model
         $packageFqcn = 'Ogp\\UiApi\\Models\\' . $modelName;
@@ -84,6 +105,7 @@ class ComponentConfigService
                     if (! $rest) {
                         throw new \InvalidArgumentException("Invalid columns segment '$token'");
                     }
+                    $this->logDebug('Entering normalizeColumnsSubset', ['method' => __METHOD__]);
                     $relationName = null;
                     if (method_exists($model, $first)) {
                         try {
@@ -149,11 +171,13 @@ class ComponentConfigService
 
     protected function parseWithRelations(string $fqcn, Model $model, ?string $with): array
     {
+        $this->logDebug('Entering parseWithRelations', ['method' => __METHOD__, 'with' => $with]);
         return $fqcn::parseWithRelations($model, $with);
     }
 
     protected function boolQuery(Request $req, string $key, bool $default = true): bool
     {
+        $this->logDebug('Entering boolQuery', ['method' => __METHOD__, 'key' => $key]);
         $val = $req->query($key);
         if ($val === null) {
             return $default;
@@ -164,6 +188,7 @@ class ComponentConfigService
 
     public function index(Request $request, string $modelName)
     {
+        $this->logDebug('Entering index', ['method' => __METHOD__, 'model' => $modelName]);
         // First resolve the view component to inspect for noModel mode
         try {
             $resolvedComp = $this->resolveViewComponent(
@@ -892,6 +917,7 @@ class ComponentConfigService
 
     public function isLangAllowedForComponent(array $compBlock, string $lang): bool
     {
+        $this->logDebug('Entering isLangAllowedForComponent', ['method' => __METHOD__, 'lang' => $lang]);
         $allowedLangs = $compBlock['lang'] ?? null;
         if (! is_array($allowedLangs) || empty($allowedLangs)) {
             return false;
@@ -901,13 +927,16 @@ class ComponentConfigService
         return in_array(strtolower($lang), $allowedNormalized, true);
     }
 
+
     public function getAllowedFiltersFromComponent(array $compBlock): ?array
     {
+        $this->logDebug('Entering getAllowedFiltersFromComponent', ['method' => __METHOD__]);
         return is_array(($compBlock['filters'] ?? null)) ? array_values($compBlock['filters']) : null;
     }
 
     public function getColumnCustomizationsFromComponent(array $compBlock): ?array
     {
+        $this->logDebug('Entering getColumnCustomizationsFromComponent', ['method' => __METHOD__]);
         $columnCustomizations = $compBlock['columnCustomizations'] ?? null;
 
         return is_array($columnCustomizations) ? $columnCustomizations : null;
@@ -919,6 +948,7 @@ class ComponentConfigService
         if (! File::exists($path)) {
             return [];
         }
+        $this->logDebug('Entering loadComponentConfig', ['method' => __METHOD__, 'key' => $componentSettingsKey]);
         $json = File::get($path);
         $cfg  = json_decode($json, true) ?: [];
 
@@ -927,6 +957,7 @@ class ComponentConfigService
 
     protected function labelFor(array $columnDef, string $field, string $lang): string
     {
+        $this->logDebug('Entering labelFor', ['method' => __METHOD__, 'field' => $field]);
         $label = $columnDef['label'] ?? null;
         if (is_array($label)) {
             if (array_key_exists($lang, $label)) {
@@ -944,11 +975,13 @@ class ComponentConfigService
 
     protected function keyFor(array $columnDef, string $field): string
     {
+        $this->logDebug('Entering keyFor', ['method' => __METHOD__, 'field' => $field]);
         return (string) ($columnDef['key'] ?? $field);
     }
 
     protected function defaultFilterTypeForDef(array $columnDef): string
     {
+        $this->logDebug('Entering defaultFilterTypeForDef', ['method' => __METHOD__]);
         $colType = strtolower((string) ($columnDef['type'] ?? 'string'));
         switch ($colType) {
             case 'date':
@@ -963,6 +996,7 @@ class ComponentConfigService
 
     protected function pickHeaderLangOverride(array $columnDef, string $requestLang): ?string
     {
+        $this->logDebug('Entering pickHeaderLangOverride', ['method' => __METHOD__, 'requestLang' => $requestLang]);
         $langs = $columnDef['lang'] ?? [];
         if (! is_array($langs)) {
             return null;
@@ -999,6 +1033,7 @@ class ComponentConfigService
 
     public function buildFilters(array $columnsSchema, string $modelName, string $lang, ?array $allowedFilters = null): array
     {
+        $this->logDebug('Entering buildFilters', ['method' => __METHOD__, 'model' => $modelName]);
         $filters = [];
         foreach ($columnsSchema as $field => $def) {
             if (is_array($allowedFilters) && ! in_array($field, $allowedFilters, true)) {

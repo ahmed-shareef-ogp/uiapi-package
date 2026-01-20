@@ -6,6 +6,7 @@ return [
 
     // Prefix for API routes provided by this package
     'route_prefix' => 'api',
+    'logging_enabled' => true,
 
     // Optional: allow future model binding overrides
     // 'model_bindings' => [
