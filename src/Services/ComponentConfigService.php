@@ -74,21 +74,42 @@ class ComponentConfigService
     {
         $this->logDebug('Entering resolveModel', ['method' => __METHOD__, 'model' => $modelName]);
 
-        // Prefer package model, fallback to app model
-        $packageFqcn = 'Ogp\\UiApi\\Models\\' . $modelName;
-        $appFqcn     = 'App\\Models\\' . $modelName;
-
-        // Avoid noisy autoload warnings when files are missing by checking paths first
-        $packagePath = base_path('vendor/ogp/uiapi/src/Models/' . $modelName . '.php');
-        $appPath     = base_path('app/Models/' . $modelName . '.php');
+        // Try multiple normalized variants to support multi-word models via '-', '_', spaces, '.'
+        $names = array_values(array_unique([
+            ucfirst(strtolower($modelName)),
+            Str::studly($modelName),
+            Str::studly(str_replace(['-', ' ', '.'], '_', $modelName)),
+        ]));
 
         $fqcn = null;
-        if (file_exists($packagePath) && class_exists($packageFqcn)) {
-            $fqcn = $packageFqcn;
-        } elseif (file_exists($appPath) && class_exists($appFqcn)) {
-            $fqcn = $appFqcn;
-        } else {
-            // Neither package nor app model present
+        foreach ($names as $name) {
+            $packageFqcn = 'Ogp\\UiApi\\Models\\' . $name;
+            $appFqcn     = 'App\\Models\\' . $name;
+
+            // Avoid noisy autoload warnings by preferring existing files when possible
+            $packagePath = base_path('vendor/ogp/uiapi/src/Models/' . $name . '.php');
+            $appPath     = base_path('app/Models/' . $name . '.php');
+
+            if (file_exists($packagePath) && class_exists($packageFqcn)) {
+                $fqcn = $packageFqcn;
+                break;
+            }
+            if (file_exists($appPath) && class_exists($appFqcn)) {
+                $fqcn = $appFqcn;
+                break;
+            }
+            // As a fallback, accept if autoloader can resolve the class without explicit file checks
+            if (class_exists($packageFqcn)) {
+                $fqcn = $packageFqcn;
+                break;
+            }
+            if (class_exists($appFqcn)) {
+                $fqcn = $appFqcn;
+                break;
+            }
+        }
+
+        if (! $fqcn) {
             return null;
         }
 
@@ -936,8 +957,9 @@ class ComponentConfigService
 
     public function loadViewConfig(string $modelName): array
     {
-        $base = base_path(config('uiapi.view_configs_path', 'app/Services/viewConfigs'));
-        $path = rtrim($base, '/') . '/' . Str::lower($modelName) . '.json';
+        $base       = base_path(config('uiapi.view_configs_path', 'app/Services/viewConfigs'));
+        $normalized = str_replace(['-', '_', ' '], '', Str::lower($modelName));
+        $path       = rtrim($base, '/') . '/' . $normalized . '.json';
         if (! File::exists($path)) {
             return [];
         }

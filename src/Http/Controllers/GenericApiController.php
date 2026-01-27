@@ -1,30 +1,19 @@
 <?php
-
 namespace Ogp\UiApi\Http\Controllers;
 
-use Illuminate\Routing\Controller as BaseController;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\Paginator;
+use Illuminate\Routing\Controller as BaseController;
+use Illuminate\Support\Str;
 
 class GenericApiController extends BaseController
 {
+
     public function index(Request $request, string $model)
     {
         $requestParams = array_change_key_case($request->all(), CASE_LOWER);
-
-        $normalized = ucfirst(strtolower($model));
-        $candidates = [
-            'Ogp\\UiApi\\Models\\' . $normalized,
-            'App\\Models\\' . $normalized,
-        ];
-        $modelClass = null;
-        foreach ($candidates as $cand) {
-            if (class_exists($cand)) {
-                $modelClass = $cand;
-                break;
-            }
-        }
+        $modelClass    = $this->resolveModelClass($model);
         if (! $modelClass) {
             return response()->json(['error' => 'Model not found'], 400);
         }
@@ -40,7 +29,7 @@ class GenericApiController extends BaseController
             ->sort($requestParams['sort'] ?? null);
 
         $perPage = isset($requestParams['per_page']) ? (int) $requestParams['per_page'] : null;
-        $page = isset($requestParams['page']) ? (int) $requestParams['page'] : null;
+        $page    = isset($requestParams['page']) ? (int) $requestParams['page'] : null;
         $records = $modelClass::paginateFromRequest(
             $query,
             $requestParams['pagination'] ?? null,
@@ -56,16 +45,16 @@ class GenericApiController extends BaseController
             }
 
             $effectivePerPage = $perPage ?? $records->perPage();
-            $lastPage = (int) max(1, (int) ceil(($total > 0 ? $total : 1) / max(1, (int) $effectivePerPage)));
+            $lastPage         = (int) max(1, (int) ceil(($total > 0 ? $total : 1) / max(1, (int) $effectivePerPage)));
 
             return response()->json([
-                'data' => $records->items(),
+                'data'       => $records->items(),
                 'pagination' => [
                     'current_page' => $records->currentPage(),
-                    'first_page' => 1,
-                    'last_page' => $lastPage,
-                    'per_page' => $effectivePerPage,
-                    'total' => $total,
+                    'first_page'   => 1,
+                    'last_page'    => $lastPage,
+                    'per_page'     => $effectivePerPage,
+                    'total'        => $total,
                 ],
             ]);
         }
@@ -76,19 +65,7 @@ class GenericApiController extends BaseController
     public function show(Request $request, string $model, int $id)
     {
         $requestParams = array_change_key_case($request->all(), CASE_LOWER);
-
-        $normalized = ucfirst(strtolower($model));
-        $candidates = [
-            'Ogp\\UiApi\\Models\\' . $normalized,
-            'App\\Models\\' . $normalized,
-        ];
-        $modelClass = null;
-        foreach ($candidates as $cand) {
-            if (class_exists($cand)) {
-                $modelClass = $cand;
-                break;
-            }
-        }
+        $modelClass    = $this->resolveModelClass($model);
         if (! $modelClass) {
             return response()->json(['error' => 'Model not found'], 400);
         }
@@ -111,18 +88,7 @@ class GenericApiController extends BaseController
 
     public function store(Request $request, string $model)
     {
-        $normalized = ucfirst(strtolower($model));
-        $candidates = [
-            'Ogp\\UiApi\\Models\\' . $normalized,
-            'App\\Models\\' . $normalized,
-        ];
-        $modelClass = null;
-        foreach ($candidates as $cand) {
-            if (class_exists($cand)) {
-                $modelClass = $cand;
-                break;
-            }
-        }
+        $modelClass = $this->resolveModelClass($model);
         if (! $modelClass) {
             return response()->json(['error' => 'Model not found'], 400);
         }
@@ -133,6 +99,7 @@ class GenericApiController extends BaseController
 
         // File upload service remains in host app
         if (class_exists('App\\Services\\FileUploadService')) {
+            $normalized = class_basename($modelClass);
             app(\App\Services\FileUploadService::class)->handle(
                 $request,
                 $record,
@@ -146,18 +113,7 @@ class GenericApiController extends BaseController
 
     public function update(Request $request, string $model, int $id)
     {
-        $normalized = ucfirst(strtolower($model));
-        $candidates = [
-            'Ogp\\UiApi\\Models\\' . $normalized,
-            'App\\Models\\' . $normalized,
-        ];
-        $modelClass = null;
-        foreach ($candidates as $cand) {
-            if (class_exists($cand)) {
-                $modelClass = $cand;
-                break;
-            }
-        }
+        $modelClass = $this->resolveModelClass($model);
         if (! $modelClass) {
             return response()->json(['error' => 'Model not found'], 400);
         }
@@ -171,18 +127,7 @@ class GenericApiController extends BaseController
 
     public function destroy(string $model, int $id)
     {
-        $normalized = ucfirst(strtolower($model));
-        $candidates = [
-            'Ogp\\UiApi\\Models\\' . $normalized,
-            'App\\Models\\' . $normalized,
-        ];
-        $modelClass = null;
-        foreach ($candidates as $cand) {
-            if (class_exists($cand)) {
-                $modelClass = $cand;
-                break;
-            }
-        }
+        $modelClass = $this->resolveModelClass($model);
         if (! $modelClass) {
             return response()->json(['error' => 'Model not found'], 400);
         }
@@ -195,5 +140,26 @@ class GenericApiController extends BaseController
         } catch (ModelNotFoundException $e) {
             return response()->json(['error' => 'Record not found'], 404);
         }
+    }
+
+    protected function resolveModelClass(string $model): ?string
+    {
+        $names = array_values(array_unique([
+            ucfirst(strtolower($model)),
+            Str::studly($model),
+            Str::studly(str_replace(['-', ' ', '.'], '_', $model)),
+        ]));
+
+        $namespaces = ['Ogp\\UiApi\\Models\\', 'App\\Models\\'];
+        foreach ($names as $normalized) {
+            foreach ($namespaces as $ns) {
+                $fqcn = $ns . $normalized;
+                if (class_exists($fqcn)) {
+                    return $fqcn;
+                }
+            }
+        }
+
+        return null;
     }
 }

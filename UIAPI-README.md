@@ -46,6 +46,14 @@ Verify:
 php artisan route:list --path=api
 ```
 
+### Model Name Normalization
+Both CCS and GAPI accept flexible model names in the URL path. The resolver normalizes common multi‑word inputs to StudlyCase and checks these namespaces in order: `Ogp\UiApi\Models\`, then `App\Models\`.
+
+- Accepted examples all resolve to `EntryType`:
+  - `entry_type`, `entry-type`, `entry type`, `entryType`
+- Ambiguous forms like `entrytype` (no delimiters) cannot be reliably split; prefer one of the delimited forms above when your model is multi‑word.
+
+
 ## Query Parameters (GAPI)
 Supported by `GenericApiController` and `BaseModel` scopes:
 - `columns`: comma list of selected columns; relation tokens supported (e.g., `country.name_eng`).
