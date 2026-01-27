@@ -19,10 +19,11 @@ class ComponentConfigService
     {
         $this->setIncludeHiddenColumnsInHeaders(false);
         // Read logging flag safely without triggering missing-config exceptions
-        $cfg = config('uiapi');
+        $cfg                  = config('uiapi');
         $this->loggingEnabled = is_array($cfg) && array_key_exists('logging_enabled', $cfg)
             ? (bool) $cfg['logging_enabled']
             : false;
+        $this->logDebug('ComponentConfigService initialized', ['method' => __METHOD__]);
     }
 
     public function setIncludeHiddenColumnsInHeaders(bool $value): void
@@ -60,6 +61,13 @@ class ComponentConfigService
         if ($this->isLoggingEnabled()) {
             Log::debug($message, $context);
         }
+    }
+
+    protected function canonicalComponentName(string $key): string
+    {
+        $this->logDebug('Entering canonicalComponentName', ['method' => __METHOD__, 'key' => $key]);
+        $canonical = (string) preg_replace('/\d+$/', '', $key);
+        return $canonical !== '' ? $canonical : $key;
     }
 
     protected function resolveModel(string $modelName): ?array
@@ -296,7 +304,7 @@ class ComponentConfigService
                     'per_page'     => $perPage,
                 ];
             }
-            $response['component']         = $component;
+            $response['component']         = $this->canonicalComponentName($component);
             $response['componentSettings'] = $componentSettings;
             if ($topLevelHeaders !== null) {
                 $response['headers'] = $topLevelHeaders;
@@ -433,7 +441,7 @@ class ComponentConfigService
                 'per_page'     => $perPage,
             ];
         }
-        $response['component']         = $component;
+        $response['component']         = $this->canonicalComponentName($component);
         $response['componentSettings'] = $componentSettings;
         if ($topLevelHeaders !== null) {
             $response['headers'] = $topLevelHeaders;
@@ -487,8 +495,11 @@ class ComponentConfigService
         $out = [];
         foreach ($tokens as $token) {
             if (Str::contains($token, '.')) {
-                // Cannot verify related schema without a model; include as-is
-                $out[] = $token;
+                // If a schema entry exists for the dot token, respect its language support
+                $def = $columnsSchema[$token] ?? null;
+                if ($def && $this->columnSupportsLang($def, $lang)) {
+                    $out[] = $token;
+                }
                 continue;
             }
             $def = $columnsSchema[$token] ?? null;
@@ -516,6 +527,9 @@ class ComponentConfigService
             $fields = array_keys($columnsSchema);
         }
 
+        // Respect column language support when building headers in noModel mode
+        $fields = $this->filterTokensByLangSupportNoModel($columnsSchema, $fields, $lang);
+
         $headers = [];
         foreach ($fields as $token) {
             $overrideTitle = $this->resolveCustomizedTitle($columnCustomizations, $token, $lang);
@@ -526,14 +540,61 @@ class ComponentConfigService
                     continue;
                 }
 
-                $title  = $overrideTitle ?? Str::title(str_replace('_', ' ', $rest));
-                $header = [
-                    'title'    => $title,
-                    'value'    => $token,
-                    'sortable' => false,
-                    'hidden'   => false,
-                ];
+                // If a schema entry exists for the relation token, use it
+                $relDef = $columnsSchema[$token] ?? null;
+                if ($relDef) {
+                    if (! $this->includeHiddenColumnsInHeaders && (bool) ($relDef['hidden'] ?? false) === true) {
+                        continue;
+                    }
 
+                    $title = $overrideTitle;
+                    if ($title === null) {
+                        $relLabel = $relDef['relationLabel'] ?? null;
+                        if (is_array($relLabel)) {
+                            $title = (string) ($relLabel[$lang] ?? $relLabel['en'] ?? $this->labelFor($relDef, $rest, $lang));
+                        } elseif (is_string($relLabel) && $relLabel !== '') {
+                            $title = $relLabel;
+                        } else {
+                            $title = $this->labelFor($relDef, $rest, $lang);
+                        }
+                    }
+                    if ($title === null) {
+                        $title = Str::title(str_replace('_', ' ', $rest));
+                    }
+
+                    $header = [
+                        'title'    => $title,
+                        'value'    => $token,
+                        'sortable' => (bool) ($relDef['sortable'] ?? false),
+                        'hidden'   => (bool) ($relDef['hidden'] ?? false),
+                    ];
+                    if (array_key_exists('type', $relDef)) {
+                        $header['type'] = (string) $relDef['type'];
+                    }
+                    if (array_key_exists('displayType', $relDef)) {
+                        $header['displayType'] = (string) $relDef['displayType'];
+                    }
+                    if (array_key_exists('displayProps', $relDef) && is_array($relDef['displayProps'])) {
+                        $header['displayProps'] = $relDef['displayProps'];
+                    }
+                    if (array_key_exists('inlineEditable', $relDef)) {
+                        $header['inlineEditable'] = (bool) $relDef['inlineEditable'];
+                    }
+                    $override = $this->pickHeaderLangOverride($relDef, $lang);
+                    if ($override !== null) {
+                        $header['lang'] = $override;
+                    }
+                } else {
+                    // Fallback when no explicit schema exists for the relation token
+                    $header = [
+                        'title'    => $overrideTitle ?? Str::title(str_replace('_', ' ', $rest)),
+                        'value'    => $token,
+                        'sortable' => false,
+                        'hidden'   => false,
+                    ];
+                }
+
+                // Apply column customizations overrides last
                 $custom = is_array($columnCustomizations) ? ($columnCustomizations[$token] ?? null) : null;
                 if (is_array($custom)) {
                     if (array_key_exists('sortable', $custom)) {
@@ -926,7 +987,6 @@ class ComponentConfigService
 
         return in_array(strtolower($lang), $allowedNormalized, true);
     }
-
 
     public function getAllowedFiltersFromComponent(array $compBlock): ?array
     {
@@ -1926,6 +1986,7 @@ class ComponentConfigService
 
         $prefix = config('uiapi.route_prefix', 'api');
         $base   = url("/{$prefix}/gapi/{$modelName}");
+        $base   = "gapi/{$modelName}";
 
         $query = 'columns=' . implode(',', $tokens);
         if (! empty($withSegments)) {

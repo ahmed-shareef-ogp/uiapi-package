@@ -107,6 +107,53 @@ Example (`app/Services/viewConfigs/person.json`):
 }
 ```
 
+### NoModel View Configs
+In some views, you can build UI payloads without an Eloquent model by setting `noModel: true` on the view config block. In this mode, the returned payload is derived entirely from the JSON config — specifically from `columns`, `columnsSchema`, optional `columnCustomizations`, `filters`, and `per_page`.
+
+- What changes in noModel:
+  - No model resolution occurs; `apiSchema()` is not required.
+  - `columnsSchema` is mandatory and drives headers, filter metadata, and language support.
+  - Relation fields can be declared directly via dot tokens as keys in `columnsSchema` (e.g., `"country.name_eng"`). Their schema entries (e.g., `hidden`, `sortable`, `type`, `displayType`, `lang`) will be used for headers and filtering.
+  - Language handling honors `lang` on each column in `columnsSchema`; only columns supporting the requested `lang` are included.
+
+- Component assembly remains the same: component templates in `src/Services/ComponentConfigs/*.json` are still used and merged with your view config inputs to produce `componentSettings`.
+
+#### Datalink in noModel mode
+The `datalink` section of a component template controls how the data-fetch URL is included in the payload.
+
+- When a template section sets `"datalink": "on"`, the CCS generates the URL automatically based on:
+  - Selected `columns` (after language filtering), including relation dot tokens.
+  - Relation dot tokens become `with` segments: for example, `country.name_eng` yields `with=country:name_eng`.
+  - Pagination is appended using `per_page` from the view config (or request override).
+  - The base path uses the package route prefix: `/{prefix}/gapi/{Model}` where `{prefix} = config('uiapi.route_prefix', 'api')`.
+
+- When a template section sets `"datalink": "off"`, the CCS omits the `datalink` key from the section payload.
+
+- When a template section sets `"datalink": <object|string>`, the CCS uses that value directly, allowing custom URLs or structures without auto-generation.
+
+Example minimal noModel view block:
+```json
+{
+  "listView2": {
+    "noModel": true,
+    "components": { "table": {}, "filterSection": { "buttons": ["submit", "clear"] } },
+    "columns": ["id", "country.name_eng", "first_name_eng"],
+    "columnsSchema": {
+      "id": { "hidden": true, "key": "id", "label": { "en": "ID" }, "type": "number", "sortable": true, "lang": ["en", "dv"] },
+      "country.name_eng": { "lang": ["en"], "hidden": true },
+      "first_name_eng": { "key": "first_name_eng", "label": { "en": "First Name" }, "type": "string", "displayType": "text", "sortable": true, "lang": ["en"] }
+    },
+    "per_page": 25,
+    "lang": ["en", "dv"]
+  }
+}
+```
+
+Notes:
+- If `lang` requested is not in the view’s `lang` array, CCS returns a message and an empty `data` array.
+- Dot-key `columnsSchema` entries are fully honored (hidden, sortable, type, displayType, inlineEditable, displayProps, lang).
+- `columnCustomizations` still apply and override schema-derived defaults in the final headers.
+
 Component configuration templates live in the package at `src/Services/ComponentConfigs/*.json` and are referenced by keys in your view config `components` block (e.g., `table`, `filterSection`). `ComponentConfigService` builds per‑component payloads based on these templates + your model’s `apiSchema`.
 
 ### Fetch Component Settings

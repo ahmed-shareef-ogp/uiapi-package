@@ -2,7 +2,7 @@
 
 namespace Ogp\UiApi\Models;
 
-class _Person extends BaseModel
+class Person extends BaseModel
 {
     protected $table = 'people';
 
