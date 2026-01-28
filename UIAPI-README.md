@@ -76,7 +76,7 @@ Responses:
 - Non‑paginated: `{ data: [...] }`
 
 ## View Configs (UI Component Settings)
-View configs are JSON files per model (lowercase filename) and can define multiple views (e.g., `listView`). Default path: `app/Services/viewConfigs`.
+View configs are JSON files per model (lowercase filename, no hyphens, no underscores or spaces) and can define multiple views (e.g., `listView`). Default path: `app/Services/viewConfigs`.
 
 Common keys:
 - `components`: components to assemble. Currently `table` and `filterSection` are supported.
