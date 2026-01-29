@@ -790,7 +790,8 @@ class ComponentConfigService
     protected function buildFormFieldsFromSchema(
         array $columnsSchema,
         ?array $columnsSubsetNormalized,
-        string $lang
+        string $lang,
+        ?Model $modelInstance = null
     ): array {
         $fields = [];
 
@@ -805,10 +806,13 @@ class ComponentConfigService
             $type  = strtolower((string) ($def['type'] ?? 'text'));
             $key   = $this->keyFor($def, $field);
             $label = $this->labelFor($def, $field, $lang);
+            $langs = $def['lang'] ?? [];
+            $langs = is_array($langs) ? array_values(array_unique(array_map(fn($l) => (string) $l, $langs))) : [];
             $fields[] = [
                 'type'  => Str::title($type),
                 'key'   => $key,
                 'label' => $label,
+                'lang'  => $langs,
             ];
         }
 
@@ -822,26 +826,76 @@ class ComponentConfigService
                 if (! $rest) {
                     continue;
                 }
-                $def = $columnsSchema[$token] ?? [];
-                if ((bool) ($def['hidden'] ?? false) === true) {
-                    continue;
-                }
-                $type  = strtolower((string) ($def['type'] ?? 'text'));
-                $key   = $this->keyFor(is_array($def) ? $def : [], $token);
-                // Prefer label using the field segment for readability
-                $label = is_array($def)
-                    ? $this->labelFor($def, $rest, $lang)
-                    : Str::title(str_replace('_', ' ', (string) $rest));
+                if ($modelInstance instanceof Model) {
+                    // Model-backed: resolve nested related model and use leaf field schema for lang/hidden/type/label
+                    $segments = explode('.', $token);
+                    $leaf     = array_pop($segments);
+                    $chain    = implode('.', $segments);
+                    $related  = $this->resolveNestedRelatedModel($modelInstance, $chain);
+                    $leafDef  = null;
+                    if ($related instanceof Model && method_exists($related, 'apiSchema')) {
+                        $schema    = $related->apiSchema();
+                        $relCols   = is_array($schema['columns'] ?? null) ? $schema['columns'] : [];
+                        $leafDef   = $relCols[$leaf] ?? null;
+                    }
+                    if (is_array($leafDef) && ((bool) ($leafDef['hidden'] ?? false) === true)) {
+                        continue;
+                    }
+                    $type  = strtolower((string) (is_array($leafDef) ? ($leafDef['type'] ?? 'text') : 'text'));
+                    $key   = is_array($leafDef) ? $this->keyFor($leafDef, $leaf) : $token;
+                    $label = is_array($leafDef) ? $this->labelFor($leafDef, $leaf, $lang) : Str::title(str_replace('_', ' ', (string) $leaf));
+                    $langs = is_array($leafDef) ? ($leafDef['lang'] ?? []) : [];
+                    $langs = is_array($langs) ? array_values(array_unique(array_map(fn($l) => (string) $l, $langs))) : [];
 
-                $fields[] = [
-                    'type'  => Str::title($type),
-                    'key'   => $key,
-                    'label' => $label,
-                ];
+                    $fields[] = [
+                        'type'  => Str::title($type),
+                        'key'   => $key,
+                        'label' => $label,
+                        'lang'  => $langs,
+                    ];
+                } else {
+                    // noModel: use explicit dot-token schema if present; otherwise include with empty lang
+                    $def = $columnsSchema[$token] ?? [];
+                    if ((bool) ($def['hidden'] ?? false) === true) {
+                        continue;
+                    }
+                    $type  = strtolower((string) ($def['type'] ?? 'text'));
+                    $key   = $this->keyFor(is_array($def) ? $def : [], $token);
+                    $label = is_array($def)
+                        ? $this->labelFor($def, $rest, $lang)
+                        : Str::title(str_replace('_', ' ', (string) $rest));
+                    $langs = is_array($def) ? ($def['lang'] ?? []) : [];
+                    $langs = is_array($langs) ? array_values(array_unique(array_map(fn($l) => (string) $l, $langs))) : [];
+
+                    $fields[] = [
+                        'type'  => Str::title($type),
+                        'key'   => $key,
+                        'label' => $label,
+                        'lang'  => $langs,
+                    ];
+                }
             }
         }
 
         return $fields;
+    }
+
+    /**
+     * Resolve a nested relation chain like "author.country.capital" to the terminal related model.
+     */
+    protected function resolveNestedRelatedModel(Model $model, string $chain): ?Model
+    {
+        $current = $model;
+        $parts   = array_filter(array_map('trim', explode('.', $chain)));
+        foreach ($parts as $relation) {
+            $next = $this->resolveRelatedModel($current, $relation);
+            if (! $next instanceof Model) {
+                return null;
+            }
+            $current = $next;
+        }
+
+        return $current;
     }
 
     /**
@@ -1335,7 +1389,7 @@ class ComponentConfigService
         foreach ($node as $key => $val) {
             if ($key === 'fields') {
                 if ($val === 'on') {
-                    $out['fields'] = $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang);
+                    $out['fields'] = $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang, $modelInstance);
                 } elseif ($val === 'off') {
                 } else {
                     // Pass-through custom fields definition
