@@ -1,0 +1,7 @@
+{
+  "form": {
+    "fields": "on",
+    "createLink": "on",
+    "button": ["create", "edit"]
+  }
+}

@@ -773,6 +773,78 @@ class ComponentConfigService
     }
 
     /**
+     * Build create link (relative) for POST create endpoint.
+     * Per requirements: plain string, relative path starting with gapi/ and no params.
+     */
+    protected function buildCreateLink(string $modelName): string
+    {
+        return 'gapi/' . $modelName;
+    }
+
+    /**
+     * Build form fields array from schema (works for both model and noModel flows).
+     * - Includes all non-hidden base fields from schema
+     * - Also includes relation dot-tokens present in columnsSubsetNormalized
+     * - Does not filter by language (explicitly includes irrespective of lang)
+     */
+    protected function buildFormFieldsFromSchema(
+        array $columnsSchema,
+        ?array $columnsSubsetNormalized,
+        string $lang
+    ): array {
+        $fields = [];
+
+        // Include base (non-dot) fields from schema, excluding hidden
+        foreach ($columnsSchema as $field => $def) {
+            if (! is_array($def)) {
+                $def = [];
+            }
+            if ((bool) ($def['hidden'] ?? false) === true) {
+                continue;
+            }
+            $type  = strtolower((string) ($def['type'] ?? 'text'));
+            $key   = $this->keyFor($def, $field);
+            $label = $this->labelFor($def, $field, $lang);
+            $fields[] = [
+                'type'  => Str::title($type),
+                'key'   => $key,
+                'label' => $label,
+            ];
+        }
+
+        // Include relation dot-tokens from columns subset, respecting hidden when schema has explicit entry
+        if (is_array($columnsSubsetNormalized) && ! empty($columnsSubsetNormalized)) {
+            foreach ($columnsSubsetNormalized as $token) {
+                if (! is_string($token) || ! Str::contains($token, '.')) {
+                    continue;
+                }
+                [$rel, $rest] = array_pad(explode('.', $token, 2), 2, null);
+                if (! $rest) {
+                    continue;
+                }
+                $def = $columnsSchema[$token] ?? [];
+                if ((bool) ($def['hidden'] ?? false) === true) {
+                    continue;
+                }
+                $type  = strtolower((string) ($def['type'] ?? 'text'));
+                $key   = $this->keyFor(is_array($def) ? $def : [], $token);
+                // Prefer label using the field segment for readability
+                $label = is_array($def)
+                    ? $this->labelFor($def, $rest, $lang)
+                    : Str::title(str_replace('_', ' ', (string) $rest));
+
+                $fields[] = [
+                    'type'  => Str::title($type),
+                    'key'   => $key,
+                    'label' => $label,
+                ];
+            }
+        }
+
+        return $fields;
+    }
+
+    /**
      * Section payload builder for noModel mode.
      */
     protected function buildSectionPayloadNoModel(
@@ -787,6 +859,28 @@ class ComponentConfigService
     ): array {
         $out = [];
         foreach ($node as $key => $val) {
+            if ($key === 'fields') {
+                if ($val === 'on') {
+                    $out['fields'] = $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang);
+                } elseif ($val === 'off') {
+                } else {
+                    // Pass-through custom fields definition
+                    $out['fields'] = $val;
+                }
+
+                continue;
+            }
+            if ($key === 'createLink') {
+                if ($val === 'on') {
+                    $out['createLink'] = $this->buildCreateLink($modelName);
+                } elseif ($val === 'off') {
+                } else {
+                    // Pass-through custom value (string|object)
+                    $out['createLink'] = $val;
+                }
+
+                continue;
+            }
             if ($key === 'headers') {
                 if ($val === 'on') {
                     $out['headers'] = $this->buildTopLevelHeadersNoModel($columnsSchema, $columnsSubsetNormalized, $lang, $columnCustomizations);
@@ -1239,6 +1333,28 @@ class ComponentConfigService
     ): array {
         $out = [];
         foreach ($node as $key => $val) {
+            if ($key === 'fields') {
+                if ($val === 'on') {
+                    $out['fields'] = $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang);
+                } elseif ($val === 'off') {
+                } else {
+                    // Pass-through custom fields definition
+                    $out['fields'] = $val;
+                }
+
+                continue;
+            }
+            if ($key === 'createLink') {
+                if ($val === 'on') {
+                    $out['createLink'] = $this->buildCreateLink($modelName);
+                } elseif ($val === 'off') {
+                } else {
+                    // Pass-through custom value (string|object)
+                    $out['createLink'] = $val;
+                }
+
+                continue;
+            }
             if ($key === 'headers') {
                 if ($val === 'on') {
                     $out['headers'] = $this->buildTopLevelHeaders($modelInstance, $columnsSchema, $columnsSubsetNormalized, $lang, $columnCustomizations);

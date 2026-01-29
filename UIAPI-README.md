@@ -1,6 +1,6 @@
 # OGP / UiApi
 
-UI API package for Laravel 12 (PHP 8.3+). It provides:
+UI API package for Laravel 12 (PHP 8.2+). It provides:
 - Generic CRUD JSON API for your Eloquent models
 - Component configuration service to generate UI payloads from simple JSON view configs
 
