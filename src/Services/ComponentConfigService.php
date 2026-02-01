@@ -803,16 +803,27 @@ class ComponentConfigService
             if ((bool) ($def['hidden'] ?? false) === true) {
                 continue;
             }
-            $type  = strtolower((string) ($def['type'] ?? 'text'));
-            $key   = $this->keyFor($def, $field);
-            $label = $this->labelFor($def, $field, $lang);
-            $langs = $def['lang'] ?? [];
-            $langs = is_array($langs) ? array_values(array_unique(array_map(fn($l) => (string) $l, $langs))) : [];
+            $key       = $this->keyFor($def, $field);
+            $label     = $this->labelFor($def, $field, $lang);
+            $inputType = (string) ($def['inputType'] ?? '');
+            if ($inputType === '') {
+                $inputType = $this->defaultInputTypeForType($def['type'] ?? null);
+            }
+            $langsRaw  = $def['lang'] ?? null;
+            $langValue = '';
+            if (is_array($langsRaw)) {
+                $normalized = array_values(array_unique(array_map(fn($l) => (string) $l, $langsRaw)));
+                if (count($normalized) === 1) {
+                    $langValue = (string) $normalized[0];
+                } elseif (! empty($normalized)) {
+                    $langValue = in_array($lang, $normalized, true) ? (string) $lang : (string) $normalized[0];
+                }
+            }
             $fields[] = [
-                'type'  => Str::title($type),
-                'key'   => $key,
-                'label' => $label,
-                'lang'  => $langs,
+                'key'       => $key,
+                'label'     => $label,
+                'lang'      => $langValue,
+                'inputType' => $inputType,
             ];
         }
 
@@ -841,17 +852,28 @@ class ComponentConfigService
                     if (is_array($leafDef) && ((bool) ($leafDef['hidden'] ?? false) === true)) {
                         continue;
                     }
-                    $type  = strtolower((string) (is_array($leafDef) ? ($leafDef['type'] ?? 'text') : 'text'));
-                    $key   = is_array($leafDef) ? $this->keyFor($leafDef, $leaf) : $token;
-                    $label = is_array($leafDef) ? $this->labelFor($leafDef, $leaf, $lang) : Str::title(str_replace('_', ' ', (string) $leaf));
-                    $langs = is_array($leafDef) ? ($leafDef['lang'] ?? []) : [];
-                    $langs = is_array($langs) ? array_values(array_unique(array_map(fn($l) => (string) $l, $langs))) : [];
+                    $key       = is_array($leafDef) ? $this->keyFor($leafDef, $leaf) : $token;
+                    $label     = is_array($leafDef) ? $this->labelFor($leafDef, $leaf, $lang) : Str::title(str_replace('_', ' ', (string) $leaf));
+                    $inputType = is_array($leafDef) ? (string) ($leafDef['inputType'] ?? '') : '';
+                    if ($inputType === '') {
+                        $inputType = $this->defaultInputTypeForType(is_array($leafDef) ? ($leafDef['type'] ?? null) : null);
+                    }
+                    $langsRaw  = is_array($leafDef) ? ($leafDef['lang'] ?? null) : null;
+                    $langValue = '';
+                    if (is_array($langsRaw)) {
+                        $normalized = array_values(array_unique(array_map(fn($l) => (string) $l, $langsRaw)));
+                        if (count($normalized) === 1) {
+                            $langValue = (string) $normalized[0];
+                        } elseif (! empty($normalized)) {
+                            $langValue = in_array($lang, $normalized, true) ? (string) $lang : (string) $normalized[0];
+                        }
+                    }
 
                     $fields[] = [
-                        'type'  => Str::title($type),
-                        'key'   => $key,
-                        'label' => $label,
-                        'lang'  => $langs,
+                        'key'       => $key,
+                        'label'     => $label,
+                        'lang'      => $langValue,
+                        'inputType' => $inputType,
                     ];
                 } else {
                     // noModel: use explicit dot-token schema if present; otherwise include with empty lang
@@ -859,19 +881,30 @@ class ComponentConfigService
                     if ((bool) ($def['hidden'] ?? false) === true) {
                         continue;
                     }
-                    $type  = strtolower((string) ($def['type'] ?? 'text'));
-                    $key   = $this->keyFor(is_array($def) ? $def : [], $token);
-                    $label = is_array($def)
+                    $key       = $this->keyFor(is_array($def) ? $def : [], $token);
+                    $label     = is_array($def)
                         ? $this->labelFor($def, $rest, $lang)
                         : Str::title(str_replace('_', ' ', (string) $rest));
-                    $langs = is_array($def) ? ($def['lang'] ?? []) : [];
-                    $langs = is_array($langs) ? array_values(array_unique(array_map(fn($l) => (string) $l, $langs))) : [];
+                    $inputType = is_array($def) ? (string) ($def['inputType'] ?? '') : '';
+                    if ($inputType === '' && is_array($def)) {
+                        $inputType = $this->defaultInputTypeForType($def['type'] ?? null);
+                    }
+                    $langsRaw  = is_array($def) ? ($def['lang'] ?? null) : null;
+                    $langValue = '';
+                    if (is_array($langsRaw)) {
+                        $normalized = array_values(array_unique(array_map(fn($l) => (string) $l, $langsRaw)));
+                        if (count($normalized) === 1) {
+                            $langValue = (string) $normalized[0];
+                        } elseif (! empty($normalized)) {
+                            $langValue = in_array($lang, $normalized, true) ? (string) $lang : (string) $normalized[0];
+                        }
+                    }
 
                     $fields[] = [
-                        'type'  => Str::title($type),
-                        'key'   => $key,
-                        'label' => $label,
-                        'lang'  => $langs,
+                        'key'       => $key,
+                        'label'     => $label,
+                        'lang'      => $langValue,
+                        'inputType' => $inputType,
                     ];
                 }
             }
@@ -1188,16 +1221,51 @@ class ComponentConfigService
     protected function labelFor(array $columnDef, string $field, string $lang): string
     {
         $this->logDebug('Entering labelFor', ['method' => __METHOD__, 'field' => $field]);
+        /**
+         * Label selection rules:
+         * - Single-language support in `lang` → use that label.
+         * - Multi-language support → use label matching request `lang` (defaults to `dv`).
+         * - Plain string label → return it.
+         * - Fallbacks → try 'en', then 'dv', then first non-empty, else title-cased field.
+         */
+        $supportedLangs = $columnDef['lang'] ?? [];
+        $supportedLangs = is_array($supportedLangs)
+            ? array_values(array_unique(array_map(fn($l) => strtolower((string) $l), $supportedLangs)))
+            : [];
+
+        $preferredLang = null;
+        if (count($supportedLangs) === 1) {
+            $preferredLang = $supportedLangs[0];
+        } else {
+            $preferredLang = strtolower((string) ($lang ?: 'dv'));
+        }
+
         $label = $columnDef['label'] ?? null;
-        if (is_array($label)) {
-            if (array_key_exists($lang, $label)) {
-                return (string) $label[$lang];
-            }
-            if (array_key_exists('en', $label)) {
-                return (string) $label['en'];
-            }
-        } elseif (is_string($label) && $label !== '') {
+        if (is_string($label) && $label !== '') {
             return $label;
+        }
+
+        if (is_array($label)) {
+            if ($preferredLang && array_key_exists($preferredLang, $label) && is_string($label[$preferredLang]) && $label[$preferredLang] !== '') {
+                return (string) $label[$preferredLang];
+            }
+            if (count($supportedLangs) === 1) {
+                foreach ($label as $val) {
+                    if (is_string($val) && $val !== '') {
+                        return (string) $val;
+                    }
+                }
+            }
+            foreach (['en', 'dv'] as $fallback) {
+                if (array_key_exists($fallback, $label) && is_string($label[$fallback]) && $label[$fallback] !== '') {
+                    return (string) $label[$fallback];
+                }
+            }
+            foreach ($label as $val) {
+                if (is_string($val) && $val !== '') {
+                    return (string) $val;
+                }
+            }
         }
 
         return Str::title(str_replace('_', ' ', $field));
@@ -1222,6 +1290,21 @@ class ComponentConfigService
             default:
                 return 'Text';
         }
+    }
+
+    /**
+     * Map schema 'type' to a default 'inputType' for form fields when not explicitly provided.
+     */
+    protected function defaultInputTypeForType(?string $type): string
+    {
+        $t = strtolower((string) ($type ?? ''));
+        return match ($t) {
+            'string'  => 'textField',
+            'number'  => 'numberField',
+            'boolean' => 'checkbox',
+            'date'    => 'datepicker',
+            default   => ''
+        };
     }
 
     protected function pickHeaderLangOverride(array $columnDef, string $requestLang): ?string
@@ -1281,22 +1364,24 @@ class ComponentConfigService
                 ];
 
                 continue;
-            }
-            $type          = strtolower((string) ($f['type'] ?? 'search'));
-            $overrideLabel = $f['label'] ?? null;
-            if (is_array($overrideLabel)) {
-                $label = (string) ($overrideLabel[$lang] ?? $overrideLabel['en'] ?? $this->labelFor($def, $field, $lang));
-            } elseif (is_string($overrideLabel) && $overrideLabel !== '') {
-                $label = $overrideLabel;
             } else {
-                $label = $this->labelFor($def, $field, $lang);
+                $type          = strtolower((string) ($f['type'] ?? $this->defaultFilterTypeForDef(is_array($def) ? $def : [])));
+                $overrideLabel = $f['label'] ?? null;
+                if (is_array($overrideLabel)) {
+                    $label = (string) ($overrideLabel[$lang] ?? $overrideLabel['en'] ?? reset($overrideLabel) ?? $this->labelFor($def, $field, $lang));
+                } elseif (is_string($overrideLabel) && $overrideLabel !== '') {
+                    $label = $overrideLabel;
+                } else {
+                    $label = $this->labelFor($def, $field, $lang);
+                }
+
+                $key    = (string) ($f['value'] ?? $this->keyFor($def, $field));
+                $filter = [
+                    'type'  => Str::title($type),
+                    'key'   => $key,
+                    'label' => $label,
+                ];
             }
-            $key    = (string) ($f['value'] ?? $this->keyFor($def, $field));
-            $filter = [
-                'type'  => Str::title($type),
-                'key'   => $key,
-                'label' => $label,
-            ];
             if ($type === 'select') {
                 $mode         = strtolower((string) ($f['mode'] ?? 'self'));
                 $rawItemTitle = $f['itemTitle'] ?? $this->keyFor($def, $field);
@@ -1580,95 +1665,124 @@ class ComponentConfigService
     protected function applyOverridesToSection(array $sectionPayload, array $overrides, string $lang): array
     {
         foreach ($overrides as $overrideKey => $overrideVal) {
-            // Handle string overrides generically for any key
-            if (is_string($overrideVal)) {
+            // 1) Scalars: set value, or "off" string to remove
+            if (is_scalar($overrideVal)) {
                 $targetKey = $overrideKey;
                 if (! array_key_exists($targetKey, $sectionPayload)) {
-                    $candidates = [];
-                    $plural     = Str::plural($overrideKey);
-                    $singular   = Str::singular($overrideKey);
+                    $plural   = Str::plural($overrideKey);
+                    $singular = Str::singular($overrideKey);
                     foreach ([$plural, $singular] as $cand) {
-                        if (is_string($cand) && $cand !== $overrideKey) {
-                            $candidates[] = $cand;
-                        }
-                    }
-                    foreach ($candidates as $cand) {
                         if (array_key_exists($cand, $sectionPayload)) {
                             $targetKey = $cand;
                             break;
                         }
                     }
                 }
-
-                if (strtolower($overrideVal) === 'off') {
+                if (is_string($overrideVal) && strtolower($overrideVal) === 'off') {
                     if (array_key_exists($targetKey, $sectionPayload)) {
                         unset($sectionPayload[$targetKey]);
                     }
-                    if ($targetKey !== $overrideKey && array_key_exists($overrideKey, $sectionPayload)) {
-                        unset($sectionPayload[$overrideKey]);
-                    }
-                } else {
-                    $sectionPayload[$targetKey] = $overrideVal;
+                    continue;
                 }
-
+                $sectionPayload[$targetKey] = $overrideVal;
                 continue;
             }
+
+            // 2) Non-array values are ignored
             if (! is_array($overrideVal)) {
                 continue;
             }
-            $allStrings = true;
-            foreach ($overrideVal as $v) {
-                if (! is_string($v)) {
-                    $allStrings = false;
-                    break;
-                }
-            }
-            if (! $allStrings) {
-                continue;
-            }
 
+            // Resolve the target key (supports plural/singular mapping)
             $targetKey = $overrideKey;
             if (! array_key_exists($targetKey, $sectionPayload)) {
-                $candidates = [];
-                $plural     = Str::plural($overrideKey);
-                $singular   = Str::singular($overrideKey);
+                $plural   = Str::plural($overrideKey);
+                $singular = Str::singular($overrideKey);
                 foreach ([$plural, $singular] as $cand) {
-                    if (is_string($cand) && $cand !== $overrideKey) {
-                        $candidates[] = $cand;
-                    }
-                }
-                foreach ($candidates as $cand) {
                     if (array_key_exists($cand, $sectionPayload)) {
                         $targetKey = $cand;
                         break;
                     }
                 }
+                // No existing target: set directly and continue
                 if (! array_key_exists($targetKey, $sectionPayload)) {
+                    $sectionPayload[$targetKey] = $overrideVal;
                     continue;
                 }
             }
+
             $original = $sectionPayload[$targetKey];
             if (! is_array($original)) {
+                // Replace non-array target with override array
+                $sectionPayload[$targetKey] = $overrideVal;
                 continue;
             }
 
-            $wanted      = array_values(array_unique(array_map('strval', $overrideVal)));
-            $wantedLower = array_map('strtolower', $wanted);
-            $filtered    = [];
-            foreach ($original as $it) {
-                if (is_array($it)) {
-                    $candidate      = (string) ($it['name'] ?? $it['type'] ?? $it['label'] ?? '');
-                    $candidateLower = strtolower($candidate);
-                    if ($candidate !== '' && in_array($candidateLower, $wantedLower, true)) {
-                        $filtered[] = $it;
-                    }
-                } elseif (is_string($it)) {
-                    if (in_array(strtolower($it), $wantedLower, true)) {
-                        $filtered[] = $it;
-                    }
+            // Determine override form: array of strings (filter) or array of objects (merge)
+            $allStrings = count($overrideVal) > 0;
+            $hasAssoc   = false;
+            foreach ($overrideVal as $v) {
+                if (is_array($v)) {
+                    $hasAssoc  = true;
+                    $allStrings = false;
+                    break;
+                }
+                if (! is_string($v)) {
+                    $allStrings = false;
                 }
             }
-            $sectionPayload[$targetKey] = $filtered;
+
+            if ($allStrings) {
+                // Filter list to only wanted items by name/type/label
+                $wanted      = array_values(array_unique(array_map('strval', $overrideVal)));
+                $wantedLower = array_map('strtolower', $wanted);
+                $filtered    = [];
+                foreach ($original as $it) {
+                    if (is_array($it)) {
+                        $candidate      = (string) ($it['name'] ?? $it['type'] ?? $it['label'] ?? '');
+                        $candidateLower = strtolower($candidate);
+                        if ($candidate !== '' && in_array($candidateLower, $wantedLower, true)) {
+                            $filtered[] = $it;
+                        }
+                    } elseif (is_string($it)) {
+                        if (in_array(strtolower($it), $wantedLower, true)) {
+                            $filtered[] = $it;
+                        }
+                    }
+                }
+                $sectionPayload[$targetKey] = $filtered;
+                continue;
+            }
+
+            if ($hasAssoc) {
+                // Merge override items with existing list using 'key' match; append new items
+                $merged = $original;
+                foreach ($overrideVal as $ov) {
+                    if (! is_array($ov)) {
+                        continue;
+                    }
+                    $ovKey        = (string) ($ov['key'] ?? '');
+                    $matchedIndex = null;
+                    if ($ovKey !== '') {
+                        foreach ($merged as $idx => $item) {
+                            if (is_array($item) && array_key_exists('key', $item) && (string) $item['key'] === $ovKey) {
+                                $matchedIndex = $idx;
+                                break;
+                            }
+                        }
+                    }
+                    if ($matchedIndex !== null) {
+                        $merged[$matchedIndex] = array_merge($merged[$matchedIndex], $ov);
+                    } else {
+                        $merged[] = $ov;
+                    }
+                }
+                $sectionPayload[$targetKey] = $merged;
+                continue;
+            }
+
+            // Default: replace target with override array
+            $sectionPayload[$targetKey] = $overrideVal;
         }
 
         return $sectionPayload;

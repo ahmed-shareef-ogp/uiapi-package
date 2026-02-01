@@ -1,0 +1,58 @@
+{
+	"toolbar": {
+		"title": "on",
+		"quickFilters": [
+			{
+				"type": "ChipGroup",
+				"key": "status",
+				"chips": [
+					{ "value": "all", "label": "All" },
+					{ "value": "active", "label": "Active" },
+					{ "value": "pending", "label": "Pending" },
+					{ "value": "completed", "label": "Completed" }
+				],
+				"color": "primary",
+				"size": "small",
+				"clickable": true
+			},
+			{
+				"type": "ChipGroup",
+				"key": "priority",
+				"chips": [
+					{ "value": "all", "label": "All Priority" },
+					{ "value": "high", "label": "High" },
+					{ "value": "medium", "label": "Medium" },
+					{ "value": "low", "label": "Low" }
+				],
+				"color": "secondary",
+				"size": "small",
+				"clickable": true
+			},
+			{
+				"type": "InputSearch",
+				"key": "search",
+				"placeholder": "Search...",
+				"size": "md"
+			},
+			{
+				"type": "DatePicker",
+				"key": "dob",
+				"placeholder": "DoB...",
+				"size": "md"
+			}
+		],
+		"buttons": [
+			{
+				"type": "search",
+				"color": "primary",
+				"icon": "magnifying-glass",
+				"variant": "contained"
+			},
+			{
+				"type": "Clear",
+				"label": "Clear",
+				"color": "secondary"
+			}
+		]
+	}
+}

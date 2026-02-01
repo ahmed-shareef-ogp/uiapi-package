@@ -2,6 +2,7 @@
   "form": {
     "fields": "on",
     "createLink": "on",
+    "numberOfColumns": 3,
     "button": ["create", "edit"]
   }
 }
