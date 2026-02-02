@@ -16,8 +16,11 @@ use Illuminate\Support\Str;
 abstract class BaseModel extends Model
 {
     protected array $searchable = [];
+
     protected array $sortable = [];
+
     protected array $withable = [];
+
     protected array $pivotable = [];
 
     public static function paginateFromRequest(Builder $query, ?string $pagination, ?int $perPage = null, ?int $page = null): Paginator|Collection
@@ -38,6 +41,15 @@ abstract class BaseModel extends Model
         return $record;
     }
 
+    public static function createFromArray(array $data, ?\App\Models\User $user = null)
+    {
+        $sanitized = static::sanitizeArrayData($data, $user, true);
+
+        $record = static::create($sanitized);
+
+        return $record;
+    }
+
     protected static function prepareData(Request $request, ?\App\Models\User $user = null): array
     {
         $data = $request->except(['password', 'pivot']);
@@ -53,11 +65,42 @@ abstract class BaseModel extends Model
         return $data;
     }
 
+    protected static function sanitizeArrayData(array $data, ?\App\Models\User $user = null, bool $isCreate = true): array
+    {
+        // Remove fields not meant for direct persistence
+        unset($data['pivot']);
+
+        if (! empty($data['password'])) {
+            $data['password'] = bcrypt($data['password']);
+        } else {
+            unset($data['password']);
+        }
+
+        if ($isCreate && $user) {
+            $data['created_by'] = $user->username ?? null;
+        }
+
+        if (! $isCreate && $user) {
+            $data['updated_by'] = $user->username ?? null;
+        }
+
+        return $data;
+    }
+
     public function updateFromRequest(Request $request, $user = null): self
     {
         $data = static::sanitizeRequestData($request, $user, false);
 
         $this->update($data);
+
+        return $this->fresh();
+    }
+
+    public function updateFromArray(array $data, $user = null): static
+    {
+        $sanitized = static::sanitizeArrayData($data, $user, false);
+        $this->fill($sanitized);
+        $this->save();
 
         return $this->fresh();
     }
@@ -109,7 +152,7 @@ abstract class BaseModel extends Model
         }
     }
 
-    protected static function handleFiles(Request $request, Model $record, ?\App\Models\User $user = null): void
+    public static function handleFiles(Request $request, Model $record, ?\App\Models\User $user = null): void
     {
         if (! method_exists(static::class, 'fileFields')) {
             return;
@@ -123,17 +166,65 @@ abstract class BaseModel extends Model
         );
     }
 
-    public static function validate(Request $request): void
+    public static function validate(Request|array $data, ?int $id = null): array
     {
-        $request->headers->set('Accept', 'application/json');
-
-        if (! method_exists(static::class, 'rules')) {
-            return;
+        if ($data instanceof Request) {
+            $data->headers->set('Accept', 'application/json');
+            $payload = $data->all();
+        } else {
+            $payload = $data;
         }
 
-        Validator::make(
-            $request->all(),
-            (new static)->rules(),
+        $rules = [];
+        if (method_exists(static::class, 'rules')) {
+            try {
+                // Try static with id
+                $rules = static::rules($id);
+            } catch (\ArgumentCountError $e) {
+                try {
+                    // Try static without id
+                    $rules = static::rules();
+                } catch (\Throwable $e2) {
+                    // Fall back to instance methods
+                    try {
+                        $inst = new static;
+                        $rules = $inst->rules($id);
+                    } catch (\ArgumentCountError $e3) {
+                        try {
+                            $inst = new static;
+                            $rules = $inst->rules();
+                        } catch (\Throwable $e4) {
+                            $rules = [];
+                        }
+                    } catch (\Throwable $e5) {
+                        $rules = [];
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Fall back to instance methods if static call failed for other reasons
+                try {
+                    $inst = new static;
+                    $rules = $inst->rules($id);
+                } catch (\ArgumentCountError $e6) {
+                    try {
+                        $inst = new static;
+                        $rules = $inst->rules();
+                    } catch (\Throwable $e7) {
+                        $rules = [];
+                    }
+                } catch (\Throwable $e8) {
+                    $rules = [];
+                }
+            }
+        }
+
+        if (empty($rules)) {
+            return $payload;
+        }
+
+        return Validator::make(
+            $payload,
+            $rules,
             static::validationMessages()
         )->validate();
     }
@@ -152,6 +243,12 @@ abstract class BaseModel extends Model
         );
 
         if (! empty($valid)) {
+            // Always include the model primary key for reliable eager loading and identification
+            $primaryKey = $this->getKeyName();
+            if (! in_array($primaryKey, $valid, true)) {
+                array_unshift($valid, $primaryKey);
+            }
+
             $query->select($valid);
         }
 
@@ -322,28 +419,48 @@ abstract class BaseModel extends Model
             return $query;
         }
 
-        foreach (explode(',', $relations) as $relation) {
-            [$name, $columns] = array_pad(explode(':', $relation, 2), 2, null);
+        // Ensure base model primary key is always selected when eager loading relations
+        $query->addSelect($this->getKeyName());
 
-            if (! method_exists($this, $name)) {
+        foreach (explode(',', $relations) as $spec) {
+            [$path, $columns] = array_pad(explode(':', $spec, 2), 2, null);
+            $path = is_string($path) ? trim($path) : '';
+            if ($path === '') {
                 continue;
             }
 
-            if ($columns) {
-                $cols = array_map('trim', explode(',', $columns));
+            // Support nested relations via dot-paths (e.g., author.country)
+            $topLevel = explode('.', $path)[0];
+            if (! method_exists($this, $topLevel)) {
+                continue;
+            }
 
-                $related = $this->$name()->getRelated();
-                $key = $related->getKeyName();
-
-                if (! in_array($key, $cols, true)) {
-                    array_unshift($cols, $key);
+            // If top-level relation is BelongsTo, ensure parent foreign key is selected on base model
+            try {
+                $rel = $this->{$topLevel}();
+                if ($rel instanceof \Illuminate\Database\Eloquent\Relations\BelongsTo) {
+                    $fk = $rel->getForeignKeyName();
+                    $query->addSelect($fk);
                 }
+            } catch (\Throwable $e) {
+                // Ignore relation introspection failures
+            }
 
+            if ($columns) {
+                $cols = array_values(array_filter(array_map('trim', explode(',', $columns)), fn ($c) => $c !== ''));
+
+                // Apply selection to the target related model (nested path supported)
                 $query->with([
-                    $name => fn ($q) => $q->select($cols),
+                    $path => function ($q) use ($cols) {
+                        $relatedKey = $q->getModel()->getKeyName();
+                        if (! in_array($relatedKey, $cols, true)) {
+                            array_unshift($cols, $relatedKey);
+                        }
+                        $q->select($cols);
+                    },
                 ]);
             } else {
-                $query->with($name);
+                $query->with($path);
             }
         }
 

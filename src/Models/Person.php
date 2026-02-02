@@ -2,6 +2,8 @@
 
 namespace Ogp\UiApi\Models;
 
+use Illuminate\Validation\Rule;
+
 class Person extends BaseModel
 {
     protected $table = 'people';
@@ -281,6 +283,84 @@ class Person extends BaseModel
                     'lang' => ['en', 'dv'],
                 ],
             ],
+        ];
+    }
+
+    public static function rules(?int $id = null): array
+    {
+        return [
+
+            'id' => $id
+                ? ['required', 'integer', Rule::unique('people', 'id')->ignore($id)]
+                : ['sometimes', 'integer'],
+
+            // English names
+            'first_name_eng' => ['required', 'string', 'max:255'],
+            'middle_name_eng' => ['required', 'string', 'max:255'],
+            'last_name_eng' => ['required', 'string', 'max:255'],
+
+            // Dhivehi names
+            'first_name_div' => ['required', 'string', 'max:255'],
+            'middle_name_div' => ['required', 'string', 'max:255'],
+            'last_name_div' => ['required', 'string', 'max:255'],
+
+            // Dates
+            'date_of_birth' => ['nullable', 'date'],
+            'date_of_death' => ['nullable', 'date', 'after_or_equal:date_of_birth'],
+
+            // Gender
+            'gender' => ['nullable', Rule::in(['M', 'F'])],
+
+            // Contact info
+            'contact' => ['nullable', 'array'],
+
+            // Parent / guardian info
+            'father_name' => ['nullable', 'string', 'max:255'],
+            'mother_name' => ['nullable', 'string', 'max:255'],
+            'guardian' => ['nullable', 'string', 'max:255'],
+
+            // Misc
+            'remarks' => ['nullable', 'string', 'max:500'],
+
+            // IDs
+            'police_pid' => ['nullable', 'integer'],
+            'crpc_id' => ['nullable', 'integer'],
+
+            // Foreign keys
+            'country_id' => ['nullable', 'integer', 'exists:countries,id'],
+
+            // Flags
+            'is_in_custody' => ['nullable', 'boolean'],
+        ];
+    }
+
+    public static function validationMessages(): array
+    {
+        return [
+            'id.unique' => 'This record already exists.',
+
+            'first_name_eng.required' => 'First name (English) is required.',
+            'middle_name_eng.required' => 'Middle name (English) is required.',
+            'last_name_eng.required' => 'Last name (English) is required.',
+
+            'first_name_div.required' => 'First name (Dhivehi) is required.',
+            'middle_name_div.required' => 'Middle name (Dhivehi) is required.',
+            'last_name_div.required' => 'Last name (Dhivehi) is required.',
+
+            'date_of_birth.date' => 'Date of birth must be a valid date.',
+            'date_of_death.date' => 'Date of death must be a valid date.',
+            'date_of_death.after_or_equal' => 'Date of death cannot be earlier than date of birth.',
+
+            'gender.in' => 'Gender must be either Male or Female.',
+
+            'contact.array' => 'Contact information must be a valid JSON object.',
+
+            'police_pid.integer' => 'Police PID must be a number.',
+            'crpc_id.integer' => 'CRPC ID must be a number.',
+
+            'country_id.exists' => 'Selected country does not exist.',
+
+            'is_in_custody.boolean' => 'Custody status must be true or false.',
         ];
     }
 
