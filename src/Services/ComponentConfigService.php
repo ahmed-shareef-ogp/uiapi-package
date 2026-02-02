@@ -1,4 +1,5 @@
 <?php
+
 namespace Ogp\UiApi\Services;
 
 use Illuminate\Database\Eloquent\Model;
@@ -10,16 +11,20 @@ use Illuminate\Support\Str;
 class ComponentConfigService
 {
     protected bool $includeHiddenColumnsInHeaders = false;
-    protected bool $includeTopLevelHeaders        = false;
-    protected bool $includeTopLevelFilters        = false;
-    protected bool $includeTopLevelPagination     = false;
-    protected bool $loggingEnabled                = false;
+
+    protected bool $includeTopLevelHeaders = false;
+
+    protected bool $includeTopLevelFilters = false;
+
+    protected bool $includeTopLevelPagination = false;
+
+    protected bool $loggingEnabled = false;
 
     public function __construct()
     {
         $this->setIncludeHiddenColumnsInHeaders(false);
         // Read logging flag safely without triggering missing-config exceptions
-        $cfg                  = config('uiapi');
+        $cfg = config('uiapi');
         $this->loggingEnabled = is_array($cfg) && array_key_exists('logging_enabled', $cfg)
             ? (bool) $cfg['logging_enabled']
             : false;
@@ -67,6 +72,7 @@ class ComponentConfigService
     {
         $this->logDebug('Entering canonicalComponentName', ['method' => __METHOD__, 'key' => $key]);
         $canonical = (string) preg_replace('/\d+$/', '', $key);
+
         return $canonical !== '' ? $canonical : $key;
     }
 
@@ -83,12 +89,12 @@ class ComponentConfigService
 
         $fqcn = null;
         foreach ($names as $name) {
-            $packageFqcn = 'Ogp\\UiApi\\Models\\' . $name;
-            $appFqcn     = 'App\\Models\\' . $name;
+            $packageFqcn = 'Ogp\\UiApi\\Models\\'.$name;
+            $appFqcn = 'App\\Models\\'.$name;
 
             // Avoid noisy autoload warnings by preferring existing files when possible
-            $packagePath = base_path('vendor/ogp/uiapi/src/Models/' . $name . '.php');
-            $appPath     = base_path('app/Models/' . $name . '.php');
+            $packagePath = base_path('vendor/ogp/uiapi/src/Models/'.$name.'.php');
+            $appPath = base_path('app/Models/'.$name.'.php');
 
             if (file_exists($packagePath) && class_exists($packageFqcn)) {
                 $fqcn = $packageFqcn;
@@ -124,9 +130,9 @@ class ComponentConfigService
     protected function normalizeColumnsSubset(Model $model, ?string $columns, array $columnsSchema): array
     {
         $columnsSubsetNormalized = null;
-        $relationsFromColumns    = [];
+        $relationsFromColumns = [];
         if ($columns) {
-            $tokens                  = array_filter(array_map('trim', explode(',', $columns)));
+            $tokens = array_filter(array_map('trim', explode(',', $columns)));
             $columnsSubsetNormalized = [];
             foreach ($tokens as $token) {
                 if (Str::contains($token, '.')) {
@@ -179,13 +185,13 @@ class ComponentConfigService
                     if (! method_exists($related, 'apiSchema')) {
                         throw new \InvalidArgumentException("Related model for '$relationName' lacks apiSchema()");
                     }
-                    $relSchema  = $related->apiSchema();
+                    $relSchema = $related->apiSchema();
                     $relColumns = $relSchema['columns'] ?? [];
                     if (! array_key_exists($rest, $relColumns)) {
                         throw new \InvalidArgumentException("Column '$rest' is not defined in $relationName apiSchema");
                     }
-                    $columnsSubsetNormalized[] = $first . '.' . $rest;
-                    $relationsFromColumns[]    = $relationName;
+                    $columnsSubsetNormalized[] = $first.'.'.$rest;
+                    $relationsFromColumns[] = $relationName;
                 } else {
                     if (! array_key_exists($token, $columnsSchema)) {
                         throw new \InvalidArgumentException("Column '$token' is not defined in apiSchema");
@@ -201,6 +207,7 @@ class ComponentConfigService
     protected function parseWithRelations(string $fqcn, Model $model, ?string $with): array
     {
         $this->logDebug('Entering parseWithRelations', ['method' => __METHOD__, 'with' => $with]);
+
         return $fqcn::parseWithRelations($model, $with);
     }
 
@@ -229,7 +236,7 @@ class ComponentConfigService
             return response()->json(['error' => $e->getMessage()], 422);
         }
 
-        $compBlock    = $resolvedComp['compBlock'];
+        $compBlock = $resolvedComp['compBlock'];
         $columnsParam = $resolvedComp['columnsParam'];
 
         // Branch: noModel flow -> do not resolve model/apiSchema; use columnsSchema from view config
@@ -246,18 +253,18 @@ class ComponentConfigService
             if (! $this->isLangAllowedForComponent($compBlock, $lang)) {
                 return response()->json([
                     'message' => "Language '$lang' not supported by view config",
-                    'data'    => [],
+                    'data' => [],
                 ]);
             }
 
             $perPage = (int) ($request->query('per_page') ?? ($compBlock['per_page'] ?? 25));
 
             [$columnsSubsetNormalized, $relationsFromColumns] = $this->normalizeColumnsSubsetNoModel($columnsParam, $columnsSchema);
-            $effectiveTokens                                  = $this->filterTokensByLangSupportNoModel($columnsSchema, $columnsSubsetNormalized ?? [], $lang);
+            $effectiveTokens = $this->filterTokensByLangSupportNoModel($columnsSchema, $columnsSubsetNormalized ?? [], $lang);
 
-            $component            = (string) ($resolvedComp['componentKey'] ?? '');
+            $component = (string) ($resolvedComp['componentKey'] ?? '');
             $columnCustomizations = $this->getColumnCustomizationsFromComponent($compBlock);
-            $allowedFilters       = $this->getAllowedFiltersFromComponent($compBlock);
+            $allowedFilters = $this->getAllowedFiltersFromComponent($compBlock);
 
             $componentSettingsQuery = $request->query('componentSettings');
             if (is_string($componentSettingsQuery) && $componentSettingsQuery !== '') {
@@ -291,7 +298,7 @@ class ComponentConfigService
                 }
                 if (! empty($missing)) {
                     return response()->json([
-                        'error'             => 'Component config(s) not found',
+                        'error' => 'Component config(s) not found',
                         'missingComponents' => $missing,
                     ], 422);
                 }
@@ -322,10 +329,10 @@ class ComponentConfigService
             if ($this->getIncludeTopLevelPagination()) {
                 $response['pagination'] = [
                     'current_page' => 1,
-                    'per_page'     => $perPage,
+                    'per_page' => $perPage,
                 ];
             }
-            $response['component']         = $this->canonicalComponentName($component);
+            $response['component'] = $this->canonicalComponentName($component);
             $response['componentSettings'] = $componentSettings;
             if ($topLevelHeaders !== null) {
                 $response['headers'] = $topLevelHeaders;
@@ -345,8 +352,8 @@ class ComponentConfigService
         }
 
         [$fqcn, $modelInstance, $schema] = $resolved;
-        $columnsSchema                   = $schema['columns'] ?? [];
-        $searchable                      = $schema['searchable'] ?? [];
+        $columnsSchema = $schema['columns'] ?? [];
+        $searchable = $schema['searchable'] ?? [];
 
         try {
             [$columnsSubsetNormalized, $relationsFromColumns] = $this->normalizeColumnsSubset($modelInstance, $columnsParam, $columnsSchema);
@@ -354,7 +361,7 @@ class ComponentConfigService
             return response()->json(['error' => $e->getMessage()], 422);
         }
 
-        $with      = $request->query('with');
+        $with = $request->query('with');
         $relations = $this->parseWithRelations($fqcn, $modelInstance, $with);
         if (! empty($relationsFromColumns)) {
             foreach ($relationsFromColumns as $rel) {
@@ -369,19 +376,19 @@ class ComponentConfigService
         if (! $this->isLangAllowedForComponent($compBlock, $lang)) {
             return response()->json([
                 'message' => "Language '$lang' not supported by view config",
-                'data'    => [],
+                'data' => [],
             ]);
         }
 
-        $q       = $request->query('q');
+        $q = $request->query('q');
         $perPage = (int) ($request->query('per_page') ?? ($compBlock['per_page'] ?? 25));
 
         $effectiveTokens = $this->filterTokensByLangSupport($modelInstance, $columnsSchema, $columnsSubsetNormalized ?? [], $lang);
-        $records         = [];
+        $records = [];
 
-        $component              = (string) ($resolvedComp['componentKey'] ?? '');
-        $columnCustomizations   = $this->getColumnCustomizationsFromComponent($compBlock);
-        $allowedFilters         = $this->getAllowedFiltersFromComponent($compBlock);
+        $component = (string) ($resolvedComp['componentKey'] ?? '');
+        $columnCustomizations = $this->getColumnCustomizationsFromComponent($compBlock);
+        $allowedFilters = $this->getAllowedFiltersFromComponent($compBlock);
         $componentSettingsQuery = $request->query('componentSettings');
         if (is_string($componentSettingsQuery) && $componentSettingsQuery !== '') {
             $cfg = $this->loadComponentConfig($componentSettingsQuery);
@@ -415,7 +422,7 @@ class ComponentConfigService
             }
             if (! empty($missing)) {
                 return response()->json([
-                    'error'             => 'Component config(s) not found',
+                    'error' => 'Component config(s) not found',
                     'missingComponents' => $missing,
                 ], 422);
             }
@@ -437,12 +444,12 @@ class ComponentConfigService
         $topLevelHeaders = null;
         if ($this->getIncludeTopLevelHeaders()) {
             $columnCustomizations = $this->getColumnCustomizationsFromComponent($compBlock);
-            $topLevelHeaders      = $this->buildTopLevelHeaders($modelInstance, $columnsSchema, $effectiveTokens, $lang, $columnCustomizations);
+            $topLevelHeaders = $this->buildTopLevelHeaders($modelInstance, $columnsSchema, $effectiveTokens, $lang, $columnCustomizations);
         }
 
         $topLevelFilters = null;
         if ($this->getIncludeTopLevelFilters()) {
-            $allowedFilters  = $this->getAllowedFiltersFromComponent($compBlock);
+            $allowedFilters = $this->getAllowedFiltersFromComponent($compBlock);
             $topLevelFilters = $this->buildTopLevelFilters(
                 $fqcn,
                 $modelInstance,
@@ -459,10 +466,10 @@ class ComponentConfigService
         if ($this->getIncludeTopLevelPagination()) {
             $response['pagination'] = [
                 'current_page' => 1,
-                'per_page'     => $perPage,
+                'per_page' => $perPage,
             ];
         }
-        $response['component']         = $this->canonicalComponentName($component);
+        $response['component'] = $this->canonicalComponentName($component);
         $response['componentSettings'] = $componentSettings;
         if ($topLevelHeaders !== null) {
             $response['headers'] = $topLevelHeaders;
@@ -480,9 +487,9 @@ class ComponentConfigService
     protected function normalizeColumnsSubsetNoModel(?string $columns, array $columnsSchema): array
     {
         $columnsSubsetNormalized = null;
-        $relationsFromColumns    = [];
+        $relationsFromColumns = [];
         if ($columns) {
-            $tokens                  = array_filter(array_map('trim', explode(',', $columns)));
+            $tokens = array_filter(array_map('trim', explode(',', $columns)));
             $columnsSubsetNormalized = [];
             foreach ($tokens as $token) {
                 if (Str::contains($token, '.')) {
@@ -490,13 +497,14 @@ class ComponentConfigService
                     if (! $rest) {
                         throw new \InvalidArgumentException("Invalid columns segment '$token'");
                     }
-                    $columnsSubsetNormalized[] = $first . '.' . $rest;
-                    $relationsFromColumns[]    = $first;
+                    $columnsSubsetNormalized[] = $first.'.'.$rest;
+                    $relationsFromColumns[] = $first;
                 } else {
                     // Validate bare token exists in provided columnsSchema when possible
                     if (! array_key_exists($token, $columnsSchema)) {
                         // Allow passthrough for unknown tokens to support flexible views
                         $columnsSubsetNormalized[] = $token;
+
                         continue;
                     }
                     $columnsSubsetNormalized[] = $token;
@@ -521,6 +529,7 @@ class ComponentConfigService
                 if ($def && $this->columnSupportsLang($def, $lang)) {
                     $out[] = $token;
                 }
+
                 continue;
             }
             $def = $columnsSchema[$token] ?? null;
@@ -543,7 +552,7 @@ class ComponentConfigService
     ): array {
         $fields = [];
         if (is_array($columnsSubsetNormalized) && ! empty($columnsSubsetNormalized)) {
-            $fields = array_values(array_unique(array_filter(array_map(fn($t) => is_string($t) ? $t : null, $columnsSubsetNormalized))));
+            $fields = array_values(array_unique(array_filter(array_map(fn ($t) => is_string($t) ? $t : null, $columnsSubsetNormalized))));
         } else {
             $fields = array_keys($columnsSchema);
         }
@@ -584,10 +593,10 @@ class ComponentConfigService
                     }
 
                     $header = [
-                        'title'    => $title,
-                        'value'    => $token,
+                        'title' => $title,
+                        'value' => $token,
                         'sortable' => (bool) ($relDef['sortable'] ?? false),
-                        'hidden'   => (bool) ($relDef['hidden'] ?? false),
+                        'hidden' => (bool) ($relDef['hidden'] ?? false),
                     ];
                     if (array_key_exists('type', $relDef)) {
                         $header['type'] = (string) $relDef['type'];
@@ -608,10 +617,10 @@ class ComponentConfigService
                 } else {
                     // Fallback when no explicit schema exists for the relation token
                     $header = [
-                        'title'    => $overrideTitle ?? Str::title(str_replace('_', ' ', $rest)),
-                        'value'    => $token,
+                        'title' => $overrideTitle ?? Str::title(str_replace('_', ' ', $rest)),
+                        'value' => $token,
                         'sortable' => false,
-                        'hidden'   => false,
+                        'hidden' => false,
                     ];
                 }
 
@@ -650,6 +659,7 @@ class ComponentConfigService
                 }
 
                 $headers[] = $header;
+
                 continue;
             }
 
@@ -661,10 +671,10 @@ class ComponentConfigService
                 continue;
             }
             $header = [
-                'title'    => $overrideTitle ?? $this->labelFor($def, $token, $lang),
-                'value'    => $this->keyFor($def, $token),
+                'title' => $overrideTitle ?? $this->labelFor($def, $token, $lang),
+                'value' => $this->keyFor($def, $token),
                 'sortable' => (bool) ($def['sortable'] ?? false),
-                'hidden'   => (bool) ($def['hidden'] ?? false),
+                'hidden' => (bool) ($def['hidden'] ?? false),
             ];
             if (array_key_exists('type', $def)) {
                 $header['type'] = (string) $def['type'];
@@ -732,7 +742,7 @@ class ComponentConfigService
     ): string {
         $baseTokens = [];
         if (is_array($columnsSubsetNormalized) && ! empty($columnsSubsetNormalized)) {
-            $baseTokens = array_values(array_unique(array_filter(array_map(fn($t) => is_string($t) ? $t : null, $columnsSubsetNormalized))));
+            $baseTokens = array_values(array_unique(array_filter(array_map(fn ($t) => is_string($t) ? $t : null, $columnsSubsetNormalized))));
         } else {
             $baseTokens = array_keys($columnsSchema);
         }
@@ -757,19 +767,19 @@ class ComponentConfigService
 
         $withSegments = [];
         foreach ($relationFields as $rel => $fields) {
-            $withSegments[] = $rel . ':' . implode(',', $fields);
+            $withSegments[] = $rel.':'.implode(',', $fields);
         }
 
         $prefix = config('uiapi.route_prefix', 'api');
-        $base   = url("/{$prefix}/gapi/{$modelName}");
+        $base = url("/{$prefix}/gapi/{$modelName}");
 
-        $query = 'columns=' . implode(',', $tokens);
+        $query = 'columns='.implode(',', $tokens);
         if (! empty($withSegments)) {
-            $query .= '&with=' . implode(',', $withSegments);
+            $query .= '&with='.implode(',', $withSegments);
         }
-        $query .= '&per_page=' . $perPage;
+        $query .= '&per_page='.$perPage;
 
-        return $base . '?' . $query;
+        return $base.'?'.$query;
     }
 
     /**
@@ -778,7 +788,7 @@ class ComponentConfigService
      */
     protected function buildCreateLink(string $modelName): string
     {
-        return 'gapi/' . $modelName;
+        return 'gapi/'.$modelName;
     }
 
     /**
@@ -795,24 +805,28 @@ class ComponentConfigService
     ): array {
         $fields = [];
 
-        // Include base (non-dot) fields from schema, excluding hidden
+        // Include base (non-dot) fields from schema
         foreach ($columnsSchema as $field => $def) {
             if (! is_array($def)) {
                 $def = [];
             }
-            if ((bool) ($def['hidden'] ?? false) === true) {
-                continue;
+            // Model-backed: include only if formField === true. Missing -> excluded.
+            // noModel: include all columns regardless of formField/hidden.
+            if ($modelInstance instanceof Model) {
+                if (! ((bool) ($def['formField'] ?? false) === true)) {
+                    continue;
+                }
             }
-            $key       = $this->keyFor($def, $field);
-            $label     = $this->labelFor($def, $field, $lang);
+            $key = $this->keyFor($def, $field);
+            $label = $this->labelFor($def, $field, $lang);
             $inputType = (string) ($def['inputType'] ?? '');
             if ($inputType === '') {
                 $inputType = $this->defaultInputTypeForType($def['type'] ?? null);
             }
-            $langsRaw  = $def['lang'] ?? null;
+            $langsRaw = $def['lang'] ?? null;
             $langValue = '';
             if (is_array($langsRaw)) {
-                $normalized = array_values(array_unique(array_map(fn($l) => (string) $l, $langsRaw)));
+                $normalized = array_values(array_unique(array_map(fn ($l) => (string) $l, $langsRaw)));
                 if (count($normalized) === 1) {
                     $langValue = (string) $normalized[0];
                 } elseif (! empty($normalized)) {
@@ -820,14 +834,14 @@ class ComponentConfigService
                 }
             }
             $fields[] = [
-                'key'       => $key,
-                'label'     => $label,
-                'lang'      => $langValue,
+                'key' => $key,
+                'label' => $label,
+                'lang' => $langValue,
                 'inputType' => $inputType,
             ];
         }
 
-        // Include relation dot-tokens from columns subset, respecting hidden when schema has explicit entry
+        // Include relation dot-tokens from columns subset
         if (is_array($columnsSubsetNormalized) && ! empty($columnsSubsetNormalized)) {
             foreach ($columnsSubsetNormalized as $token) {
                 if (! is_string($token) || ! Str::contains($token, '.')) {
@@ -838,30 +852,31 @@ class ComponentConfigService
                     continue;
                 }
                 if ($modelInstance instanceof Model) {
-                    // Model-backed: resolve nested related model and use leaf field schema for lang/hidden/type/label
+                    // Model-backed: resolve nested related model and use leaf field schema for lang/type/label
                     $segments = explode('.', $token);
-                    $leaf     = array_pop($segments);
-                    $chain    = implode('.', $segments);
-                    $related  = $this->resolveNestedRelatedModel($modelInstance, $chain);
-                    $leafDef  = null;
+                    $leaf = array_pop($segments);
+                    $chain = implode('.', $segments);
+                    $related = $this->resolveNestedRelatedModel($modelInstance, $chain);
+                    $leafDef = null;
                     if ($related instanceof Model && method_exists($related, 'apiSchema')) {
-                        $schema    = $related->apiSchema();
-                        $relCols   = is_array($schema['columns'] ?? null) ? $schema['columns'] : [];
-                        $leafDef   = $relCols[$leaf] ?? null;
+                        $schema = $related->apiSchema();
+                        $relCols = is_array($schema['columns'] ?? null) ? $schema['columns'] : [];
+                        $leafDef = $relCols[$leaf] ?? null;
                     }
-                    if (is_array($leafDef) && ((bool) ($leafDef['hidden'] ?? false) === true)) {
+                    // Relations: display only if leaf schema has formField === true
+                    if (! (is_array($leafDef) && ((bool) ($leafDef['formField'] ?? false) === true))) {
                         continue;
                     }
-                    $key       = is_array($leafDef) ? $this->keyFor($leafDef, $leaf) : $token;
-                    $label     = is_array($leafDef) ? $this->labelFor($leafDef, $leaf, $lang) : Str::title(str_replace('_', ' ', (string) $leaf));
+                    $key = is_array($leafDef) ? $this->keyFor($leafDef, $leaf) : $token;
+                    $label = is_array($leafDef) ? $this->labelFor($leafDef, $leaf, $lang) : Str::title(str_replace('_', ' ', (string) $leaf));
                     $inputType = is_array($leafDef) ? (string) ($leafDef['inputType'] ?? '') : '';
                     if ($inputType === '') {
                         $inputType = $this->defaultInputTypeForType(is_array($leafDef) ? ($leafDef['type'] ?? null) : null);
                     }
-                    $langsRaw  = is_array($leafDef) ? ($leafDef['lang'] ?? null) : null;
+                    $langsRaw = is_array($leafDef) ? ($leafDef['lang'] ?? null) : null;
                     $langValue = '';
                     if (is_array($langsRaw)) {
-                        $normalized = array_values(array_unique(array_map(fn($l) => (string) $l, $langsRaw)));
+                        $normalized = array_values(array_unique(array_map(fn ($l) => (string) $l, $langsRaw)));
                         if (count($normalized) === 1) {
                             $langValue = (string) $normalized[0];
                         } elseif (! empty($normalized)) {
@@ -870,29 +885,26 @@ class ComponentConfigService
                     }
 
                     $fields[] = [
-                        'key'       => $key,
-                        'label'     => $label,
-                        'lang'      => $langValue,
+                        'key' => $key,
+                        'label' => $label,
+                        'lang' => $langValue,
                         'inputType' => $inputType,
                     ];
                 } else {
-                    // noModel: use explicit dot-token schema if present; otherwise include with empty lang
+                    // noModel: include all columns; use explicit dot-token schema if present; otherwise include with empty lang
                     $def = $columnsSchema[$token] ?? [];
-                    if ((bool) ($def['hidden'] ?? false) === true) {
-                        continue;
-                    }
-                    $key       = $this->keyFor(is_array($def) ? $def : [], $token);
-                    $label     = is_array($def)
+                    $key = $this->keyFor(is_array($def) ? $def : [], $token);
+                    $label = is_array($def)
                         ? $this->labelFor($def, $rest, $lang)
                         : Str::title(str_replace('_', ' ', (string) $rest));
                     $inputType = is_array($def) ? (string) ($def['inputType'] ?? '') : '';
                     if ($inputType === '' && is_array($def)) {
                         $inputType = $this->defaultInputTypeForType($def['type'] ?? null);
                     }
-                    $langsRaw  = is_array($def) ? ($def['lang'] ?? null) : null;
+                    $langsRaw = is_array($def) ? ($def['lang'] ?? null) : null;
                     $langValue = '';
                     if (is_array($langsRaw)) {
-                        $normalized = array_values(array_unique(array_map(fn($l) => (string) $l, $langsRaw)));
+                        $normalized = array_values(array_unique(array_map(fn ($l) => (string) $l, $langsRaw)));
                         if (count($normalized) === 1) {
                             $langValue = (string) $normalized[0];
                         } elseif (! empty($normalized)) {
@@ -901,9 +913,9 @@ class ComponentConfigService
                     }
 
                     $fields[] = [
-                        'key'       => $key,
-                        'label'     => $label,
-                        'lang'      => $langValue,
+                        'key' => $key,
+                        'label' => $label,
+                        'lang' => $langValue,
                         'inputType' => $inputType,
                     ];
                 }
@@ -919,7 +931,7 @@ class ComponentConfigService
     protected function resolveNestedRelatedModel(Model $model, string $chain): ?Model
     {
         $current = $model;
-        $parts   = array_filter(array_map('trim', explode('.', $chain)));
+        $parts = array_filter(array_map('trim', explode('.', $chain)));
         foreach ($parts as $relation) {
             $next = $this->resolveRelatedModel($current, $relation);
             if (! $next instanceof Model) {
@@ -992,7 +1004,7 @@ class ComponentConfigService
                 if ($val === 'on') {
                     $out['pagination'] = [
                         'current_page' => 1,
-                        'per_page'     => $perPage,
+                        'per_page' => $perPage,
                     ];
                 } elseif ($val === 'off') {
                 } else {
@@ -1048,7 +1060,7 @@ class ComponentConfigService
         $componentSettings = [];
 
         if (isset($configFile[$componentSettingsKey]) && is_array($configFile[$componentSettingsKey])) {
-            $sectionCfg                               = $configFile[$componentSettingsKey];
+            $sectionCfg = $configFile[$componentSettingsKey];
             $componentSettings[$componentSettingsKey] = $this->buildSectionPayloadNoModel(
                 $sectionCfg,
                 $columnsSchema,
@@ -1111,7 +1123,7 @@ class ComponentConfigService
 
             if (isset($configFile[$key]) && is_array($configFile[$key])) {
                 $sectionCfg = $configFile[$key];
-                $payload    = $this->buildSectionPayloadNoModel(
+                $payload = $this->buildSectionPayloadNoModel(
                     $sectionCfg,
                     $columnsSchema,
                     $columnsSubsetNormalized,
@@ -1138,14 +1150,14 @@ class ComponentConfigService
 
     public function loadViewConfig(string $modelName): array
     {
-        $base       = base_path(config('uiapi.view_configs_path', 'app/Services/viewConfigs'));
+        $base = base_path(config('uiapi.view_configs_path', 'app/Services/viewConfigs'));
         $normalized = str_replace(['-', '_', ' '], '', Str::lower($modelName));
-        $path       = rtrim($base, '/') . '/' . $normalized . '.json';
+        $path = rtrim($base, '/').'/'.$normalized.'.json';
         if (! File::exists($path)) {
             return [];
         }
         $json = File::get($path);
-        $cfg  = json_decode($json, true) ?: [];
+        $cfg = json_decode($json, true) ?: [];
 
         return $cfg;
     }
@@ -1174,7 +1186,7 @@ class ComponentConfigService
 
         return [
             'componentKey' => (string) $componentKey,
-            'compBlock'    => $compBlock,
+            'compBlock' => $compBlock,
             'columnsParam' => (string) $columnsParam,
         ];
     }
@@ -1186,7 +1198,7 @@ class ComponentConfigService
         if (! is_array($allowedLangs) || empty($allowedLangs)) {
             return false;
         }
-        $allowedNormalized = array_values(array_unique(array_map(fn($l) => strtolower((string) $l), $allowedLangs)));
+        $allowedNormalized = array_values(array_unique(array_map(fn ($l) => strtolower((string) $l), $allowedLangs)));
 
         return in_array(strtolower($lang), $allowedNormalized, true);
     }
@@ -1194,6 +1206,7 @@ class ComponentConfigService
     public function getAllowedFiltersFromComponent(array $compBlock): ?array
     {
         $this->logDebug('Entering getAllowedFiltersFromComponent', ['method' => __METHOD__]);
+
         return is_array(($compBlock['filters'] ?? null)) ? array_values($compBlock['filters']) : null;
     }
 
@@ -1207,13 +1220,13 @@ class ComponentConfigService
 
     public function loadComponentConfig(string $componentSettingsKey): array
     {
-        $path = __DIR__ . '/ComponentConfigs/' . basename($componentSettingsKey) . '.json';
+        $path = __DIR__.'/ComponentConfigs/'.basename($componentSettingsKey).'.json';
         if (! File::exists($path)) {
             return [];
         }
         $this->logDebug('Entering loadComponentConfig', ['method' => __METHOD__, 'key' => $componentSettingsKey]);
         $json = File::get($path);
-        $cfg  = json_decode($json, true) ?: [];
+        $cfg = json_decode($json, true) ?: [];
 
         return $cfg;
     }
@@ -1230,7 +1243,7 @@ class ComponentConfigService
          */
         $supportedLangs = $columnDef['lang'] ?? [];
         $supportedLangs = is_array($supportedLangs)
-            ? array_values(array_unique(array_map(fn($l) => strtolower((string) $l), $supportedLangs)))
+            ? array_values(array_unique(array_map(fn ($l) => strtolower((string) $l), $supportedLangs)))
             : [];
 
         $preferredLang = null;
@@ -1274,6 +1287,7 @@ class ComponentConfigService
     protected function keyFor(array $columnDef, string $field): string
     {
         $this->logDebug('Entering keyFor', ['method' => __METHOD__, 'field' => $field]);
+
         return (string) ($columnDef['key'] ?? $field);
     }
 
@@ -1298,12 +1312,13 @@ class ComponentConfigService
     protected function defaultInputTypeForType(?string $type): string
     {
         $t = strtolower((string) ($type ?? ''));
+
         return match ($t) {
-            'string'  => 'textField',
-            'number'  => 'numberField',
+            'string' => 'textField',
+            'number' => 'numberField',
             'boolean' => 'checkbox',
-            'date'    => 'datepicker',
-            default   => ''
+            'date' => 'datepicker',
+            default => ''
         };
     }
 
@@ -1314,12 +1329,12 @@ class ComponentConfigService
         if (! is_array($langs)) {
             return null;
         }
-        $normalized = array_values(array_unique(array_map(fn($l) => strtolower((string) $l), $langs)));
+        $normalized = array_values(array_unique(array_map(fn ($l) => strtolower((string) $l), $langs)));
         if (empty($normalized)) {
             return null;
         }
-        $current    = strtolower($requestLang);
-        $candidates = array_values(array_filter($normalized, fn($l) => $l !== $current));
+        $current = strtolower($requestLang);
+        $candidates = array_values(array_filter($normalized, fn ($l) => $l !== $current));
         if (in_array($current, $normalized, true)) {
             if (! empty($candidates)) {
                 if ($current === 'en' && in_array('dv', $candidates, true)) {
@@ -1358,14 +1373,14 @@ class ComponentConfigService
             $f = $def['filterable'] ?? null;
             if (! is_array($f)) {
                 $filters[] = [
-                    'type'  => $this->defaultFilterTypeForDef(is_array($def) ? $def : []),
-                    'key'   => $this->keyFor(is_array($def) ? $def : [], $field),
+                    'type' => $this->defaultFilterTypeForDef(is_array($def) ? $def : []),
+                    'key' => $this->keyFor(is_array($def) ? $def : [], $field),
                     'label' => $this->labelFor(is_array($def) ? $def : [], $field, $lang),
                 ];
 
                 continue;
             } else {
-                $type          = strtolower((string) ($f['type'] ?? $this->defaultFilterTypeForDef(is_array($def) ? $def : [])));
+                $type = strtolower((string) ($f['type'] ?? $this->defaultFilterTypeForDef(is_array($def) ? $def : [])));
                 $overrideLabel = $f['label'] ?? null;
                 if (is_array($overrideLabel)) {
                     $label = (string) ($overrideLabel[$lang] ?? $overrideLabel['en'] ?? reset($overrideLabel) ?? $this->labelFor($def, $field, $lang));
@@ -1375,22 +1390,22 @@ class ComponentConfigService
                     $label = $this->labelFor($def, $field, $lang);
                 }
 
-                $key    = (string) ($f['value'] ?? $this->keyFor($def, $field));
+                $key = (string) ($f['value'] ?? $this->keyFor($def, $field));
                 $filter = [
-                    'type'  => Str::title($type),
-                    'key'   => $key,
+                    'type' => Str::title($type),
+                    'key' => $key,
                     'label' => $label,
                 ];
             }
             if ($type === 'select') {
-                $mode         = strtolower((string) ($f['mode'] ?? 'self'));
+                $mode = strtolower((string) ($f['mode'] ?? 'self'));
                 $rawItemTitle = $f['itemTitle'] ?? $this->keyFor($def, $field);
                 if (is_array($rawItemTitle)) {
                     $itemTitle = (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $this->keyFor($def, $field));
                 } else {
                     $itemTitle = (string) $rawItemTitle;
                 }
-                $itemValue           = (string) ($f['itemValue'] ?? $this->keyFor($def, $field));
+                $itemValue = (string) ($f['itemValue'] ?? $this->keyFor($def, $field));
                 $filter['itemTitle'] = $itemTitle;
                 $filter['itemValue'] = $itemValue;
                 if ($mode === 'self') {
@@ -1415,7 +1430,7 @@ class ComponentConfigService
                         $filter['items'] = [];
                     }
                 } else {
-                    $relationship     = (string) ($f['relationship'] ?? '');
+                    $relationship = (string) ($f['relationship'] ?? '');
                     $relatedModelName = $relationship !== '' ? Str::studly($relationship) : null;
                     if (! $relatedModelName) {
                         $base = $key;
@@ -1424,10 +1439,10 @@ class ComponentConfigService
                         }
                         $relatedModelName = Str::studly($base);
                     }
-                    $columnsParam  = $itemValue . ',' . $itemTitle;
-                    $sortParam     = $itemTitle;
-                    $prefix        = config('uiapi.route_prefix', 'api');
-                    $filter['url'] = url("/{$prefix}/gapi/{$relatedModelName}") . '?columns=' . $columnsParam . '&sort=' . $sortParam . '&pagination=off&wrap=data';
+                    $columnsParam = $itemValue.','.$itemTitle;
+                    $sortParam = $itemTitle;
+                    $prefix = config('uiapi.route_prefix', 'api');
+                    $filter['url'] = url("/{$prefix}/gapi/{$relatedModelName}").'?columns='.$columnsParam.'&sort='.$sortParam.'&pagination=off&wrap=data';
                 }
             }
             $filters[] = $filter;
@@ -1518,7 +1533,7 @@ class ComponentConfigService
                 if ($val === 'on') {
                     $out['pagination'] = [
                         'current_page' => 1,
-                        'per_page'     => $perPage,
+                        'per_page' => $perPage,
                     ];
                 } elseif ($val === 'off') {
                 } else {
@@ -1573,7 +1588,7 @@ class ComponentConfigService
         $componentSettings = [];
 
         if (isset($configFile[$componentSettingsKey]) && is_array($configFile[$componentSettingsKey])) {
-            $sectionCfg                               = $configFile[$componentSettingsKey];
+            $sectionCfg = $configFile[$componentSettingsKey];
             $componentSettings[$componentSettingsKey] = $this->buildSectionPayload(
                 $sectionCfg,
                 $columnsSchema,
@@ -1636,7 +1651,7 @@ class ComponentConfigService
 
             if (isset($configFile[$key]) && is_array($configFile[$key])) {
                 $sectionCfg = $configFile[$key];
-                $payload    = $this->buildSectionPayload(
+                $payload = $this->buildSectionPayload(
                     $sectionCfg,
                     $columnsSchema,
                     $columnsSubsetNormalized,
@@ -1669,7 +1684,7 @@ class ComponentConfigService
             if (is_scalar($overrideVal)) {
                 $targetKey = $overrideKey;
                 if (! array_key_exists($targetKey, $sectionPayload)) {
-                    $plural   = Str::plural($overrideKey);
+                    $plural = Str::plural($overrideKey);
                     $singular = Str::singular($overrideKey);
                     foreach ([$plural, $singular] as $cand) {
                         if (array_key_exists($cand, $sectionPayload)) {
@@ -1682,9 +1697,11 @@ class ComponentConfigService
                     if (array_key_exists($targetKey, $sectionPayload)) {
                         unset($sectionPayload[$targetKey]);
                     }
+
                     continue;
                 }
                 $sectionPayload[$targetKey] = $overrideVal;
+
                 continue;
             }
 
@@ -1696,7 +1713,7 @@ class ComponentConfigService
             // Resolve the target key (supports plural/singular mapping)
             $targetKey = $overrideKey;
             if (! array_key_exists($targetKey, $sectionPayload)) {
-                $plural   = Str::plural($overrideKey);
+                $plural = Str::plural($overrideKey);
                 $singular = Str::singular($overrideKey);
                 foreach ([$plural, $singular] as $cand) {
                     if (array_key_exists($cand, $sectionPayload)) {
@@ -1707,6 +1724,7 @@ class ComponentConfigService
                 // No existing target: set directly and continue
                 if (! array_key_exists($targetKey, $sectionPayload)) {
                     $sectionPayload[$targetKey] = $overrideVal;
+
                     continue;
                 }
             }
@@ -1715,15 +1733,16 @@ class ComponentConfigService
             if (! is_array($original)) {
                 // Replace non-array target with override array
                 $sectionPayload[$targetKey] = $overrideVal;
+
                 continue;
             }
 
             // Determine override form: array of strings (filter) or array of objects (merge)
             $allStrings = count($overrideVal) > 0;
-            $hasAssoc   = false;
+            $hasAssoc = false;
             foreach ($overrideVal as $v) {
                 if (is_array($v)) {
-                    $hasAssoc  = true;
+                    $hasAssoc = true;
                     $allStrings = false;
                     break;
                 }
@@ -1734,12 +1753,12 @@ class ComponentConfigService
 
             if ($allStrings) {
                 // Filter list to only wanted items by name/type/label
-                $wanted      = array_values(array_unique(array_map('strval', $overrideVal)));
+                $wanted = array_values(array_unique(array_map('strval', $overrideVal)));
                 $wantedLower = array_map('strtolower', $wanted);
-                $filtered    = [];
+                $filtered = [];
                 foreach ($original as $it) {
                     if (is_array($it)) {
-                        $candidate      = (string) ($it['name'] ?? $it['type'] ?? $it['label'] ?? '');
+                        $candidate = (string) ($it['name'] ?? $it['type'] ?? $it['label'] ?? '');
                         $candidateLower = strtolower($candidate);
                         if ($candidate !== '' && in_array($candidateLower, $wantedLower, true)) {
                             $filtered[] = $it;
@@ -1751,6 +1770,7 @@ class ComponentConfigService
                     }
                 }
                 $sectionPayload[$targetKey] = $filtered;
+
                 continue;
             }
 
@@ -1761,7 +1781,7 @@ class ComponentConfigService
                     if (! is_array($ov)) {
                         continue;
                     }
-                    $ovKey        = (string) ($ov['key'] ?? '');
+                    $ovKey = (string) ($ov['key'] ?? '');
                     $matchedIndex = null;
                     if ($ovKey !== '') {
                         foreach ($merged as $idx => $item) {
@@ -1778,6 +1798,7 @@ class ComponentConfigService
                     }
                 }
                 $sectionPayload[$targetKey] = $merged;
+
                 continue;
             }
 
@@ -1807,7 +1828,7 @@ class ComponentConfigService
 
     protected function pickDefaultTitleField(Model $related): string
     {
-        $schema  = method_exists($related, 'apiSchema') ? $related->apiSchema() : [];
+        $schema = method_exists($related, 'apiSchema') ? $related->apiSchema() : [];
         $columns = $schema['columns'] ?? [];
         foreach (['name', 'name_eng', 'title'] as $preferred) {
             if (array_key_exists($preferred, $columns) && ($columns[$preferred]['hidden'] ?? false) === false) {
@@ -1842,7 +1863,7 @@ class ComponentConfigService
 
         foreach ($fields as $field) {
             $def = $columnsSchema[$field] ?? null;
-            $f   = is_array($def) ? ($def['filterable'] ?? null) : null;
+            $f = is_array($def) ? ($def['filterable'] ?? null) : null;
 
             if (! is_array($def) || ! $this->columnSupportsLang($def, $lang)) {
                 continue;
@@ -1862,15 +1883,15 @@ class ComponentConfigService
 
             if (! is_array($f)) {
                 $filters[] = [
-                    'type'  => $def ? $this->defaultFilterTypeForDef($def) : 'Search',
-                    'key'   => $key,
+                    'type' => $def ? $this->defaultFilterTypeForDef($def) : 'Search',
+                    'key' => $key,
                     'label' => $label,
                 ];
 
                 continue;
             }
 
-            $type          = strtolower((string) ($f['type'] ?? 'search'));
+            $type = strtolower((string) ($f['type'] ?? 'search'));
             $overrideLabel = $f['label'] ?? null;
 
             if (is_array($overrideLabel)) {
@@ -1882,8 +1903,8 @@ class ComponentConfigService
             $key = (string) ($f['value'] ?? $key);
 
             $out = [
-                'type'  => Str::title($type),
-                'key'   => $key,
+                'type' => Str::title($type),
+                'key' => $key,
                 'label' => $label,
             ];
 
@@ -1891,7 +1912,7 @@ class ComponentConfigService
 
             if ($mode === 'self') {
                 $rawItemTitle = $f['itemTitle'] ?? $key;
-                $itemTitle    = is_array($rawItemTitle)
+                $itemTitle = is_array($rawItemTitle)
                     ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle))
                     : (string) $rawItemTitle;
 
@@ -1900,7 +1921,7 @@ class ComponentConfigService
                 $out['itemTitle'] = $itemTitle;
                 $out['itemValue'] = $itemValue;
 
-                $items        = $f['items'] ?? [];
+                $items = $f['items'] ?? [];
                 $out['items'] = [];
 
                 if (is_array($items)) {
@@ -1922,24 +1943,24 @@ class ComponentConfigService
 
             if ($mode === 'relation') {
                 $relationship = (string) ($f['relationship'] ?? '');
-                $related      = $relationship
+                $related = $relationship
                     ? $this->resolveRelatedModel($modelInstance, $relationship)
                     : null;
 
                 if ($related) {
-                    $itemValue    = (string) ($f['itemValue'] ?? 'id');
+                    $itemValue = (string) ($f['itemValue'] ?? 'id');
                     $rawItemTitle = $f['itemTitle'] ?? $this->pickDefaultTitleField($related);
-                    $itemTitle    = is_array($rawItemTitle)
+                    $itemTitle = is_array($rawItemTitle)
                         ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle))
                         : (string) $rawItemTitle;
 
                     $out['itemTitle'] = $itemTitle;
                     $out['itemValue'] = $itemValue;
 
-                    $prefix     = config('uiapi.route_prefix', 'api');
-                    $base       = url('/' . $prefix . '/' . class_basename($related));
-                    $query      = "columns={$itemValue},{$itemTitle}&sort={$itemTitle}&pagination=off&wrap=data";
-                    $out['url'] = $base . '?' . $query;
+                    $prefix = config('uiapi.route_prefix', 'api');
+                    $base = url('/'.$prefix.'/'.class_basename($related));
+                    $query = "columns={$itemValue},{$itemTitle}&sort={$itemTitle}&pagination=off&wrap=data";
+                    $out['url'] = $base.'?'.$query;
                 }
             }
 
@@ -1955,7 +1976,7 @@ class ComponentConfigService
         if (! is_array($langs)) {
             return true;
         }
-        $normalized = array_values(array_unique(array_map(fn($l) => strtolower((string) $l), $langs)));
+        $normalized = array_values(array_unique(array_map(fn ($l) => strtolower((string) $l), $langs)));
 
         return in_array(strtolower($lang), $normalized, true);
     }
@@ -2008,10 +2029,10 @@ class ComponentConfigService
                 }
 
                 if ($relationName) {
-                    $related    = $modelInstance->{$relationName}()->getRelated();
-                    $relSchema  = method_exists($related, 'apiSchema') ? $related->apiSchema() : [];
+                    $related = $modelInstance->{$relationName}()->getRelated();
+                    $relSchema = method_exists($related, 'apiSchema') ? $related->apiSchema() : [];
                     $relColumns = $relSchema['columns'] ?? [];
-                    $relDef     = $relColumns[$rest] ?? null;
+                    $relDef = $relColumns[$rest] ?? null;
                     if ($relDef && $this->columnSupportsLang($relDef, $lang)) {
                         $out[] = $token;
                     }
@@ -2040,7 +2061,7 @@ class ComponentConfigService
     ): array {
         $fields = [];
         if (is_array($columnsSubsetNormalized) && ! empty($columnsSubsetNormalized)) {
-            $fields = array_values(array_unique(array_filter(array_map(fn($t) => is_string($t) ? $t : null, $columnsSubsetNormalized))));
+            $fields = array_values(array_unique(array_filter(array_map(fn ($t) => is_string($t) ? $t : null, $columnsSubsetNormalized))));
         } else {
             $fields = array_keys($columnsSchema);
         }
@@ -2097,10 +2118,10 @@ class ComponentConfigService
 
                 $relDef = null;
                 if ($relationName) {
-                    $related    = $modelInstance->{$relationName}()->getRelated();
-                    $relSchema  = method_exists($related, 'apiSchema') ? $related->apiSchema() : [];
+                    $related = $modelInstance->{$relationName}()->getRelated();
+                    $relSchema = method_exists($related, 'apiSchema') ? $related->apiSchema() : [];
                     $relColumns = $relSchema['columns'] ?? [];
-                    $relDef     = $relColumns[$rest] ?? null;
+                    $relDef = $relColumns[$rest] ?? null;
                 }
 
                 if (! $this->includeHiddenColumnsInHeaders && $relDef && (bool) ($relDef['hidden'] ?? false) === true) {
@@ -2125,10 +2146,10 @@ class ComponentConfigService
                 }
 
                 $header = [
-                    'title'    => $title,
-                    'value'    => $token,
+                    'title' => $title,
+                    'value' => $token,
                     'sortable' => (bool) ($relDef['sortable'] ?? false),
-                    'hidden'   => (bool) ($relDef['hidden'] ?? false),
+                    'hidden' => (bool) ($relDef['hidden'] ?? false),
                 ];
                 if ($relDef && array_key_exists('type', $relDef)) {
                     $header['type'] = (string) $relDef['type'];
@@ -2193,10 +2214,10 @@ class ComponentConfigService
                 continue;
             }
             $header = [
-                'title'    => $overrideTitle ?? $this->labelFor($def, $token, $lang),
-                'value'    => $this->keyFor($def, $token),
+                'title' => $overrideTitle ?? $this->labelFor($def, $token, $lang),
+                'value' => $this->keyFor($def, $token),
                 'sortable' => (bool) ($def['sortable'] ?? false),
-                'hidden'   => (bool) ($def['hidden'] ?? false),
+                'hidden' => (bool) ($def['hidden'] ?? false),
             ];
             if (array_key_exists('type', $def)) {
                 $header['type'] = (string) $def['type'];
@@ -2262,7 +2283,7 @@ class ComponentConfigService
     ): string {
         $baseTokens = [];
         if (is_array($columnsSubsetNormalized) && ! empty($columnsSubsetNormalized)) {
-            $baseTokens = array_values(array_unique(array_filter(array_map(fn($t) => is_string($t) ? $t : null, $columnsSubsetNormalized))));
+            $baseTokens = array_values(array_unique(array_filter(array_map(fn ($t) => is_string($t) ? $t : null, $columnsSubsetNormalized))));
         } else {
             $baseTokens = array_keys($columnsSchema);
         }
@@ -2287,19 +2308,19 @@ class ComponentConfigService
 
         $withSegments = [];
         foreach ($relationFields as $rel => $fields) {
-            $withSegments[] = $rel . ':' . implode(',', $fields);
+            $withSegments[] = $rel.':'.implode(',', $fields);
         }
 
         $prefix = config('uiapi.route_prefix', 'api');
-        $base   = url("/{$prefix}/gapi/{$modelName}");
-        $base   = "gapi/{$modelName}";
+        $base = url("/{$prefix}/gapi/{$modelName}");
+        $base = "gapi/{$modelName}";
 
-        $query = 'columns=' . implode(',', $tokens);
+        $query = 'columns='.implode(',', $tokens);
         if (! empty($withSegments)) {
-            $query .= '&with=' . implode(',', $withSegments);
+            $query .= '&with='.implode(',', $withSegments);
         }
-        $query .= '&per_page=' . $perPage;
+        $query .= '&per_page='.$perPage;
 
-        return $base . '?' . $query;
+        return $base.'?'.$query;
     }
 }

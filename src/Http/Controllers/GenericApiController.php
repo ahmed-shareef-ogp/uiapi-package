@@ -40,6 +40,11 @@ class GenericApiController extends BaseController
         if (($requestParams['pagination'] ?? null) !== 'off' && $records instanceof Paginator) {
             // Build list of auto-added foreign keys (belongsTo) to hide from JSON output
             $autoHidden = [];
+            // Also hide auto-included computed attribute dependencies
+            $columnsParam = $requestParams['columns'] ?? null;
+            $requestedCols = is_string($columnsParam) && $columnsParam !== ''
+                ? array_values(array_filter(array_map('trim', explode(',', $columnsParam)), fn ($c) => $c !== ''))
+                : [];
             if (isset($requestParams['with']) && is_string($requestParams['with'])) {
                 try {
                     $modelInstance = new $modelClass;
@@ -65,6 +70,25 @@ class GenericApiController extends BaseController
                 } catch (\Throwable $e) {
                     // ignore
                 }
+            }
+
+            // Compute dependencies hidden list: only hide those not explicitly requested
+            try {
+                $modelInstance = isset($modelInstance) ? $modelInstance : new $modelClass;
+                if (method_exists($modelInstance, 'getComputedAttributeDependencies')) {
+                    $depsMap = $modelInstance->getComputedAttributeDependencies();
+                    foreach ($depsMap as $attr => $deps) {
+                        if (in_array($attr, $requestedCols, true)) {
+                            foreach ((array) $deps as $depCol) {
+                                if (! in_array($depCol, $requestedCols, true)) {
+                                    $autoHidden[] = $depCol;
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                // ignore
             }
 
             try {
@@ -99,6 +123,10 @@ class GenericApiController extends BaseController
 
         // Non-paginated response; hide auto-included foreign keys if any
         $autoHidden = [];
+        $columnsParam = $requestParams['columns'] ?? null;
+        $requestedCols = is_string($columnsParam) && $columnsParam !== ''
+            ? array_values(array_filter(array_map('trim', explode(',', $columnsParam)), fn ($c) => $c !== ''))
+            : [];
         if (isset($requestParams['with']) && is_string($requestParams['with'])) {
             try {
                 $modelInstance = new $modelClass;
@@ -124,6 +152,25 @@ class GenericApiController extends BaseController
             } catch (\Throwable $e) {
                 // ignore
             }
+        }
+
+        // Compute dependencies hidden list: only hide those not explicitly requested
+        try {
+            $modelInstance = isset($modelInstance) ? $modelInstance : new $modelClass;
+            if (method_exists($modelInstance, 'getComputedAttributeDependencies')) {
+                $depsMap = $modelInstance->getComputedAttributeDependencies();
+                foreach ($depsMap as $attr => $deps) {
+                    if (in_array($attr, $requestedCols, true)) {
+                        foreach ((array) $deps as $depCol) {
+                            if (! in_array($depCol, $requestedCols, true)) {
+                                $autoHidden[] = $depCol;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // ignore
         }
 
         if (! empty($autoHidden) && $records instanceof \Illuminate\Support\Collection) {

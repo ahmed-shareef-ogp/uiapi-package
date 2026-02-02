@@ -231,26 +231,42 @@ abstract class BaseModel extends Model
 
     public function scopeSelectColumns(Builder $query, ?string $columns): Builder
     {
+        // When columns param is missing, leave query as-is (select *)
         if (! $columns) {
             return $query;
         }
 
-        $requested = array_map('trim', explode(',', $columns));
+        $requested = array_values(array_filter(array_map('trim', explode(',', $columns)), fn ($c) => $c !== ''));
 
-        $valid = array_filter(
+        // Valid DB columns among requested
+        $validDb = array_values(array_filter(
             $requested,
             fn ($col) => Schema::hasColumn($this->getTable(), $col)
-        );
+        ));
 
-        if (! empty($valid)) {
-            // Always include the model primary key for reliable eager loading and identification
-            $primaryKey = $this->getKeyName();
-            if (! in_array($primaryKey, $valid, true)) {
-                array_unshift($valid, $primaryKey);
+        // Auto-include dependencies for requested computed attributes
+        $depsMap = $this->getComputedAttributeDependencies();
+        $depsToAdd = [];
+        foreach ($depsMap as $attr => $deps) {
+            if (in_array($attr, $requested, true)) {
+                foreach ((array) $deps as $depCol) {
+                    if (Schema::hasColumn($this->getTable(), $depCol)) {
+                        $depsToAdd[] = $depCol;
+                    }
+                }
             }
-
-            $query->select($valid);
         }
+
+        // Ensure the model primary key is always selected
+        $primaryKey = $this->getKeyName();
+        $finalSelect = array_values(array_unique(array_merge([$primaryKey], $validDb, $depsToAdd)));
+
+        // If nothing is valid, still select primary key (limit payload)
+        if (empty($finalSelect)) {
+            $finalSelect = [$primaryKey];
+        }
+
+        $query->select($finalSelect);
 
         return $query;
     }
@@ -552,5 +568,20 @@ abstract class BaseModel extends Model
     {
         return true;
         // return empty($this->pivotable) || in_array($relation, $this->pivotable, true);
+    }
+
+    /**
+     * Return mapping of computed attributes to their dependent DB columns.
+     * Example: ['full_name' => ['first_name_eng','middle_name_eng','last_name_eng']]
+     */
+    public function getComputedAttributeDependencies(): array
+    {
+        $deps = [];
+        // Allow models to define a property for dependencies
+        if (property_exists($this, 'computedAttributeDependencies') && is_array($this->computedAttributeDependencies)) {
+            $deps = $this->computedAttributeDependencies;
+        }
+
+        return is_array($deps) ? $deps : [];
     }
 }

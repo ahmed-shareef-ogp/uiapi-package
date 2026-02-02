@@ -2,6 +2,7 @@
 
 namespace Ogp\UiApi\Models;
 
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Validation\Rule;
 
 class Person extends BaseModel
@@ -13,10 +14,38 @@ class Person extends BaseModel
         'first_name_eng',
     ];
 
+    protected $appends = ['full_name'];
+
+    // Declare computed attribute dependencies for auto-select
+    protected array $computedAttributeDependencies = [
+        'full_name' => ['first_name_eng', 'middle_name_eng', 'last_name_eng'],
+    ];
+
+    protected function fullName(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => collect([
+                $this->first_name_eng,
+                $this->middle_name_eng,
+                $this->last_name_eng,
+            ])
+                ->filter() // removes null, empty strings
+                ->join(' ')
+        );
+    }
+
     public function apiSchema(): array
     {
         return [
             'columns' => [
+                'full_name' => [
+                    'hidden' => false,
+                    'key' => 'full_name',
+                    'label' => ['dv' => 'ނަން', 'en' => 'Full Name'],
+                    'type' => 'string',
+                    'displayType' => 'text',
+                    'lang' => ['en', 'dv'],
+                ],
                 'id' => [
                     'hidden' => true,
                     'key' => 'id',
@@ -64,7 +93,7 @@ class Person extends BaseModel
                     'type' => 'string',
                     'displayType' => 'text',
                     'inputType' => 'textField',
-                    'formField' => true,
+                    'formField' => false,
                     'fieldComponent' => 'textInput',
                     'validationRule' => 'required|string|max:255',
                     'sortable' => true,
@@ -191,6 +220,7 @@ class Person extends BaseModel
                     'type' => 'number',
                     'displayType' => 'text',
                     'inputType' => 'select',
+                    'formField' => true,
                     'lang' => ['en', 'dv'],
                     'filterable' => [
                         'type' => 'select',
