@@ -833,12 +833,70 @@ class ComponentConfigService
                     $langValue = in_array($lang, $normalized, true) ? (string) $lang : (string) $normalized[0];
                 }
             }
-            $fields[] = [
+            $fieldOut = [
                 'key' => $key,
                 'label' => $label,
                 'lang' => $langValue,
                 'inputType' => $inputType,
             ];
+
+            // For select inputType, include itemTitle/itemValue and items or url
+            if (strtolower($inputType) === 'select') {
+                $cfg = $def['select'] ?? ($def['filterable'] ?? null); // legacy fallback
+                if (is_array($cfg)) {
+                    $mode = strtolower((string) ($cfg['mode'] ?? 'self'));
+                    $rawItemTitle = $cfg['itemTitle'] ?? $key;
+                    $itemTitle = is_array($rawItemTitle)
+                        ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $key)
+                        : (string) $rawItemTitle;
+                    $itemValue = (string) ($cfg['itemValue'] ?? $key);
+                    $fieldOut['itemTitle'] = $itemTitle;
+                    $fieldOut['itemValue'] = $itemValue;
+
+                    if ($mode === 'self') {
+                        $items = $cfg['items'] ?? [];
+                        $outItems = [];
+                        if (is_array($items)) {
+                            foreach (array_values($items) as $it) {
+                                if (is_array($it)) {
+                                    $outItems[] = [
+                                        $itemTitle => (string) ($it[$itemTitle] ?? ''),
+                                        $itemValue => (string) ($it[$itemValue] ?? ''),
+                                    ];
+                                } else {
+                                    $outItems[] = [
+                                        $itemTitle => (string) $it,
+                                        $itemValue => (string) $it,
+                                    ];
+                                }
+                            }
+                        }
+                        $fieldOut['items'] = $outItems;
+                    } else {
+                        // relation mode: build URL for fetching options
+                        $relationship = (string) ($cfg['relationship'] ?? '');
+                        $related = null;
+                        if ($modelInstance instanceof Model && $relationship !== '') {
+                            $related = $this->resolveRelatedModel($modelInstance, $relationship);
+                        }
+                        $relatedName = $related ? class_basename($related) : null;
+                        if (! $relatedName) {
+                            // Try to infer from key
+                            $base = $key;
+                            if (\Illuminate\Support\Str::endsWith($base, '_id')) {
+                                $base = \Illuminate\Support\Str::beforeLast($base, '_id');
+                            }
+                            $relatedName = \Illuminate\Support\Str::studly($base);
+                        }
+                        $prefix = config('uiapi.route_prefix', 'api');
+                        $columnsParam = $itemValue.','.$itemTitle;
+                        $sortParam = $itemTitle;
+                        $fieldOut['url'] = url('/'.$prefix.'/gapi/'.$relatedName).'?columns='.$columnsParam.'&sort='.$sortParam.'&pagination=off&wrap=data';
+                    }
+                }
+            }
+
+            $fields[] = $fieldOut;
         }
 
         // Include relation dot-tokens from columns subset
@@ -884,12 +942,65 @@ class ComponentConfigService
                         }
                     }
 
-                    $fields[] = [
+                    $fieldOut = [
                         'key' => $key,
                         'label' => $label,
                         'lang' => $langValue,
                         'inputType' => $inputType,
                     ];
+                    if (strtolower($inputType) === 'select' && is_array($leafDef)) {
+                        $cfg = $leafDef['select'] ?? ($leafDef['filterable'] ?? null);
+                        if (is_array($cfg)) {
+                            $mode = strtolower((string) ($cfg['mode'] ?? 'self'));
+                            $rawItemTitle = $cfg['itemTitle'] ?? $key;
+                            $itemTitle = is_array($rawItemTitle)
+                                ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $key)
+                                : (string) $rawItemTitle;
+                            $itemValue = (string) ($cfg['itemValue'] ?? $key);
+                            $fieldOut['itemTitle'] = $itemTitle;
+                            $fieldOut['itemValue'] = $itemValue;
+                            if ($mode === 'self') {
+                                $items = $cfg['items'] ?? [];
+                                $outItems = [];
+                                if (is_array($items)) {
+                                    foreach (array_values($items) as $it) {
+                                        if (is_array($it)) {
+                                            $outItems[] = [
+                                                $itemTitle => (string) ($it[$itemTitle] ?? ''),
+                                                $itemValue => (string) ($it[$itemValue] ?? ''),
+                                            ];
+                                        } else {
+                                            $outItems[] = [
+                                                $itemTitle => (string) $it,
+                                                $itemValue => (string) $it,
+                                            ];
+                                        }
+                                    }
+                                }
+                                $fieldOut['items'] = $outItems;
+                            } else {
+                                $relationship = (string) ($cfg['relationship'] ?? '');
+                                $related = null;
+                                if ($modelInstance instanceof Model && $relationship !== '') {
+                                    $related = $this->resolveRelatedModel($modelInstance, $relationship);
+                                }
+                                $relatedName = $related ? class_basename($related) : null;
+                                if (! $relatedName) {
+                                    $base = $key;
+                                    if (\Illuminate\Support\Str::endsWith($base, '_id')) {
+                                        $base = \Illuminate\Support\Str::beforeLast($base, '_id');
+                                    }
+                                    $relatedName = \Illuminate\Support\Str::studly($base);
+                                }
+                                $prefix = config('uiapi.route_prefix', 'api');
+                                $columnsParam = $itemValue.','.$itemTitle;
+                                $sortParam = $itemTitle;
+                                $fieldOut['url'] = url('/'.$prefix.'/gapi/'.$relatedName).'?columns='.$columnsParam.'&sort='.$sortParam.'&pagination=off&wrap=data';
+                            }
+                        }
+                    }
+
+                    $fields[] = $fieldOut;
                 } else {
                     // noModel: include all columns; use explicit dot-token schema if present; otherwise include with empty lang
                     $def = $columnsSchema[$token] ?? [];
@@ -912,12 +1023,64 @@ class ComponentConfigService
                         }
                     }
 
-                    $fields[] = [
+                    $fieldOut = [
                         'key' => $key,
                         'label' => $label,
                         'lang' => $langValue,
                         'inputType' => $inputType,
                     ];
+                    if (strtolower($inputType) === 'select' && is_array($def)) {
+                        $cfg = $def['select'] ?? ($def['filterable'] ?? null);
+                        if (is_array($cfg)) {
+                            $mode = strtolower((string) ($cfg['mode'] ?? 'self'));
+                            $rawItemTitle = $cfg['itemTitle'] ?? $key;
+                            $itemTitle = is_array($rawItemTitle)
+                                ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $key)
+                                : (string) $rawItemTitle;
+                            $itemValue = (string) ($cfg['itemValue'] ?? $key);
+                            $fieldOut['itemTitle'] = $itemTitle;
+                            $fieldOut['itemValue'] = $itemValue;
+                            if ($mode === 'self') {
+                                $items = $cfg['items'] ?? [];
+                                $outItems = [];
+                                if (is_array($items)) {
+                                    foreach (array_values($items) as $it) {
+                                        if (is_array($it)) {
+                                            $outItems[] = [
+                                                $itemTitle => (string) ($it[$itemTitle] ?? ''),
+                                                $itemValue => (string) ($it[$itemValue] ?? ''),
+                                            ];
+                                        } else {
+                                            $outItems[] = [
+                                                $itemTitle => (string) $it,
+                                                $itemValue => (string) $it,
+                                            ];
+                                        }
+                                    }
+                                }
+                                $fieldOut['items'] = $outItems;
+                            } else {
+                                // noModel relation: infer related model name from relationship or token
+                                $relationship = (string) ($cfg['relationship'] ?? '');
+                                $relatedName = $relationship !== '' ? \Illuminate\Support\Str::studly($relationship) : null;
+                                if (! $relatedName) {
+                                    $base = $key;
+                                    if (\Illuminate\Support\Str::contains($token, '.')) {
+                                        $base = \Illuminate\Support\Str::before($token, '.');
+                                    } elseif (\Illuminate\Support\Str::endsWith($base, '_id')) {
+                                        $base = \Illuminate\Support\Str::beforeLast($base, '_id');
+                                    }
+                                    $relatedName = \Illuminate\Support\Str::studly($base);
+                                }
+                                $prefix = config('uiapi.route_prefix', 'api');
+                                $columnsParam = $itemValue.','.$itemTitle;
+                                $sortParam = $itemTitle;
+                                $fieldOut['url'] = url('/'.$prefix.'/gapi/'.$relatedName).'?columns='.$columnsParam.'&sort='.$sortParam.'&pagination=off&wrap=data';
+                            }
+                        }
+                    }
+
+                    $fields[] = $fieldOut;
                 }
             }
         }
@@ -1370,48 +1533,59 @@ class ComponentConfigService
             if (! is_array($def) || ! $this->columnSupportsLang($def, $lang)) {
                 continue;
             }
-            $f = $def['filterable'] ?? null;
-            if (! is_array($f)) {
-                $filters[] = [
-                    'type' => $this->defaultFilterTypeForDef(is_array($def) ? $def : []),
-                    'key' => $this->keyFor(is_array($def) ? $def : [], $field),
-                    'label' => $this->labelFor(is_array($def) ? $def : [], $field, $lang),
-                ];
+            // New structure: use inputType and config under a key with the same name
+            $inputType = (string) ($def['inputType'] ?? $this->defaultInputTypeForType($def['type'] ?? null));
+            $cfg = is_string($inputType) && $inputType !== '' ? ($def[$inputType] ?? null) : null;
 
-                continue;
-            } else {
-                $type = strtolower((string) ($f['type'] ?? $this->defaultFilterTypeForDef(is_array($def) ? $def : [])));
-                $overrideLabel = $f['label'] ?? null;
-                if (is_array($overrideLabel)) {
-                    $label = (string) ($overrideLabel[$lang] ?? $overrideLabel['en'] ?? reset($overrideLabel) ?? $this->labelFor($def, $field, $lang));
-                } elseif (is_string($overrideLabel) && $overrideLabel !== '') {
-                    $label = $overrideLabel;
-                } else {
-                    $label = $this->labelFor($def, $field, $lang);
-                }
+            // Backward-compatibility: fall back to legacy 'filterable'
+            $legacy = $def['filterable'] ?? null;
 
-                $key = (string) ($f['value'] ?? $this->keyFor($def, $field));
-                $filter = [
-                    'type' => Str::title($type),
-                    'key' => $key,
-                    'label' => $label,
-                ];
+            $label = $this->labelFor($def, $field, $lang);
+            $key = $this->keyFor($def, $field);
+
+            // Determine filter type token for UI
+            $typeToken = match (strtolower($inputType)) {
+                'select' => 'Select',
+                'text', 'textfield' => 'Text',
+                'number', 'numberfield' => 'Number',
+                'checkbox' => 'Checkbox',
+                'date', 'datepicker' => 'Date',
+                default => $this->defaultFilterTypeForDef($def),
+            };
+
+            // Allow overrides from cfg or legacy
+            $overrideLabel = is_array($cfg) ? ($cfg['label'] ?? null) : (is_array($legacy) ? ($legacy['label'] ?? null) : null);
+            if (is_array($overrideLabel)) {
+                $label = (string) ($overrideLabel[$lang] ?? $overrideLabel['en'] ?? reset($overrideLabel) ?? $label);
+            } elseif (is_string($overrideLabel) && $overrideLabel !== '') {
+                $label = $overrideLabel;
             }
-            if ($type === 'select') {
-                $mode = strtolower((string) ($f['mode'] ?? 'self'));
-                $rawItemTitle = $f['itemTitle'] ?? $this->keyFor($def, $field);
-                if (is_array($rawItemTitle)) {
-                    $itemTitle = (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $this->keyFor($def, $field));
-                } else {
-                    $itemTitle = (string) $rawItemTitle;
-                }
-                $itemValue = (string) ($f['itemValue'] ?? $this->keyFor($def, $field));
+            $key = (string) ((is_array($cfg) ? ($cfg['value'] ?? null) : null) ?? (is_array($legacy) ? ($legacy['value'] ?? null) : null) ?? $key);
+
+            $filter = [
+                'type' => $typeToken,
+                'key' => $key,
+                'label' => $label,
+            ];
+
+            // For select-type filters, build items or relation URL
+            if (strtolower($typeToken) === 'select') {
+                $source = is_array($cfg) ? $cfg : (is_array($legacy) ? $legacy : []);
+                $mode = strtolower((string) ($source['mode'] ?? 'self'));
+
+                $rawItemTitle = $source['itemTitle'] ?? $this->keyFor($def, $field);
+                $itemTitle = is_array($rawItemTitle)
+                    ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $this->keyFor($def, $field))
+                    : (string) $rawItemTitle;
+                $itemValue = (string) ($source['itemValue'] ?? $this->keyFor($def, $field));
+
                 $filter['itemTitle'] = $itemTitle;
                 $filter['itemValue'] = $itemValue;
+
                 if ($mode === 'self') {
-                    $items = $f['items'] ?? [];
+                    $items = $source['items'] ?? [];
+                    $pruned = [];
                     if (is_array($items)) {
-                        $pruned = [];
                         foreach (array_values($items) as $it) {
                             if (is_array($it)) {
                                 $pruned[] = [
@@ -1425,12 +1599,10 @@ class ComponentConfigService
                                 ];
                             }
                         }
-                        $filter['items'] = $pruned;
-                    } else {
-                        $filter['items'] = [];
                     }
+                    $filter['items'] = $pruned;
                 } else {
-                    $relationship = (string) ($f['relationship'] ?? '');
+                    $relationship = (string) ($source['relationship'] ?? '');
                     $relatedModelName = $relationship !== '' ? Str::studly($relationship) : null;
                     if (! $relatedModelName) {
                         $base = $key;
@@ -1445,6 +1617,7 @@ class ComponentConfigService
                     $filter['url'] = url("/{$prefix}/gapi/{$relatedModelName}").'?columns='.$columnsParam.'&sort='.$sortParam.'&pagination=off&wrap=data';
                 }
             }
+
             $filters[] = $filter;
         }
 
@@ -1863,7 +2036,7 @@ class ComponentConfigService
 
         foreach ($fields as $field) {
             $def = $columnsSchema[$field] ?? null;
-            $f = is_array($def) ? ($def['filterable'] ?? null) : null;
+            $f = is_array($def) ? ($def['filterable'] ?? null) : null; // legacy fallback
 
             if (! is_array($def) || ! $this->columnSupportsLang($def, $lang)) {
                 continue;
@@ -1881,86 +2054,78 @@ class ComponentConfigService
                 ? $this->keyFor($def, $field)
                 : $field;
 
-            if (! is_array($f)) {
-                $filters[] = [
-                    'type' => $def ? $this->defaultFilterTypeForDef($def) : 'Search',
-                    'key' => $key,
-                    'label' => $label,
-                ];
+            // New structure: prefer 'inputType' config under matching key
+            $inputType = (string) ($def['inputType'] ?? $this->defaultInputTypeForType($def['type'] ?? null));
+            $cfg = is_string($inputType) && $inputType !== '' ? ($def[$inputType] ?? null) : null;
 
-                continue;
-            }
+            $typeToken = match (strtolower($inputType)) {
+                'select' => 'Select',
+                'text', 'textfield' => 'Text',
+                'number', 'numberfield' => 'Number',
+                'checkbox' => 'Checkbox',
+                'date', 'datepicker' => 'Date',
+                default => ($def ? $this->defaultFilterTypeForDef($def) : 'Search'),
+            };
 
-            $type = strtolower((string) ($f['type'] ?? 'search'));
-            $overrideLabel = $f['label'] ?? null;
-
+            // Overrides
+            $overrideLabel = is_array($cfg) ? ($cfg['label'] ?? null) : (is_array($f) ? ($f['label'] ?? null) : null);
             if (is_array($overrideLabel)) {
                 $label = (string) ($overrideLabel[$lang] ?? $overrideLabel['en'] ?? $label);
             } elseif (is_string($overrideLabel) && $overrideLabel !== '') {
                 $label = $overrideLabel;
             }
-
-            $key = (string) ($f['value'] ?? $key);
+            $key = (string) ((is_array($cfg) ? ($cfg['value'] ?? null) : null) ?? (is_array($f) ? ($f['value'] ?? null) : null) ?? $key);
 
             $out = [
-                'type' => Str::title($type),
+                'type' => $typeToken,
                 'key' => $key,
                 'label' => $label,
             ];
 
-            $mode = strtolower((string) ($f['mode'] ?? 'self'));
+            // Select specifics
+            if (strtolower($typeToken) === 'select') {
+                $source = is_array($cfg) ? $cfg : (is_array($f) ? $f : []);
+                $mode = strtolower((string) ($source['mode'] ?? 'self'));
 
-            if ($mode === 'self') {
-                $rawItemTitle = $f['itemTitle'] ?? $key;
+                $rawItemTitle = $source['itemTitle'] ?? $key;
                 $itemTitle = is_array($rawItemTitle)
                     ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle))
                     : (string) $rawItemTitle;
 
-                $itemValue = (string) ($f['itemValue'] ?? $key);
+                $itemValue = (string) ($source['itemValue'] ?? $key);
 
                 $out['itemTitle'] = $itemTitle;
                 $out['itemValue'] = $itemValue;
 
-                $items = $f['items'] ?? [];
-                $out['items'] = [];
-
-                if (is_array($items)) {
-                    foreach (array_values($items) as $it) {
-                        if (is_array($it)) {
-                            $out['items'][] = [
-                                $itemTitle => (string) ($it[$itemTitle] ?? ''),
-                                $itemValue => (string) ($it[$itemValue] ?? ''),
-                            ];
-                        } else {
-                            $out['items'][] = [
-                                $itemTitle => (string) $it,
-                                $itemValue => (string) $it,
-                            ];
+                if ($mode === 'self') {
+                    $items = $source['items'] ?? [];
+                    $out['items'] = [];
+                    if (is_array($items)) {
+                        foreach (array_values($items) as $it) {
+                            if (is_array($it)) {
+                                $out['items'][] = [
+                                    $itemTitle => (string) ($it[$itemTitle] ?? ''),
+                                    $itemValue => (string) ($it[$itemValue] ?? ''),
+                                ];
+                            } else {
+                                $out['items'][] = [
+                                    $itemTitle => (string) $it,
+                                    $itemValue => (string) $it,
+                                ];
+                            }
                         }
                     }
-                }
-            }
-
-            if ($mode === 'relation') {
-                $relationship = (string) ($f['relationship'] ?? '');
-                $related = $relationship
-                    ? $this->resolveRelatedModel($modelInstance, $relationship)
-                    : null;
-
-                if ($related) {
-                    $itemValue = (string) ($f['itemValue'] ?? 'id');
-                    $rawItemTitle = $f['itemTitle'] ?? $this->pickDefaultTitleField($related);
-                    $itemTitle = is_array($rawItemTitle)
-                        ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle))
-                        : (string) $rawItemTitle;
-
-                    $out['itemTitle'] = $itemTitle;
-                    $out['itemValue'] = $itemValue;
-
-                    $prefix = config('uiapi.route_prefix', 'api');
-                    $base = url('/'.$prefix.'/'.class_basename($related));
-                    $query = "columns={$itemValue},{$itemTitle}&sort={$itemTitle}&pagination=off&wrap=data";
-                    $out['url'] = $base.'?'.$query;
+                } else {
+                    $relationship = (string) ($source['relationship'] ?? '');
+                    $related = $relationship
+                        ? $this->resolveRelatedModel($modelInstance, $relationship)
+                        : null;
+                    if ($related) {
+                        $prefix = config('uiapi.route_prefix', 'api');
+                        $base = url('/'.$prefix.'/'.class_basename($related));
+                        $query = "columns={$itemValue},{$itemTitle}&sort={$itemTitle}&pagination=off&wrap=data";
+                        $out['url'] = $base.'?'.$query;
+                    }
                 }
             }
 
@@ -2157,8 +2322,13 @@ class ComponentConfigService
                 if ($relDef && array_key_exists('displayType', $relDef)) {
                     $header['displayType'] = (string) $relDef['displayType'];
                 }
-                if ($relDef && array_key_exists('displayProps', $relDef) && is_array($relDef['displayProps'])) {
-                    $header['displayProps'] = $relDef['displayProps'];
+                // New structure: attach config under the displayType key (e.g., 'chip')
+                if ($relDef && array_key_exists('displayType', $relDef)) {
+                    $dt = (string) $relDef['displayType'];
+                    $cfg = $relDef[$dt] ?? ($relDef['displayProps'] ?? null); // legacy fallback
+                    if (is_array($cfg)) {
+                        $header[$dt] = $cfg;
+                    }
                 }
                 if ($relDef && array_key_exists('inlineEditable', $relDef)) {
                     $header['inlineEditable'] = (bool) $relDef['inlineEditable'];
@@ -2225,8 +2395,13 @@ class ComponentConfigService
             if (array_key_exists('displayType', $def)) {
                 $header['displayType'] = (string) $def['displayType'];
             }
-            if (array_key_exists('displayProps', $def) && is_array($def['displayProps'])) {
-                $header['displayProps'] = $def['displayProps'];
+            // New structure: attach config under the displayType key (e.g., 'chip')
+            if (array_key_exists('displayType', $def)) {
+                $dt = (string) $def['displayType'];
+                $cfg = $def[$dt] ?? ($def['displayProps'] ?? null); // legacy fallback
+                if (is_array($cfg)) {
+                    $header[$dt] = $cfg;
+                }
             }
             if (array_key_exists('inlineEditable', $def)) {
                 $header['inlineEditable'] = (bool) $def['inlineEditable'];
@@ -2249,8 +2424,13 @@ class ComponentConfigService
                 if (array_key_exists('displayType', $custom)) {
                     $header['displayType'] = (string) $custom['displayType'];
                 }
-                if (array_key_exists('displayProps', $custom) && is_array($custom['displayProps'])) {
-                    $header['displayProps'] = $custom['displayProps'];
+                // Custom overrides may still include legacy 'displayProps'
+                if (array_key_exists('displayType', $custom)) {
+                    $cdt = (string) $custom['displayType'];
+                    $ccfg = $custom[$cdt] ?? ($custom['displayProps'] ?? null);
+                    if (is_array($ccfg)) {
+                        $header[$cdt] = $ccfg;
+                    }
                 }
                 if (array_key_exists('inlineEditable', $custom)) {
                     $header['inlineEditable'] = (bool) $custom['inlineEditable'];

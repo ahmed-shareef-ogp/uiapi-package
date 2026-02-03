@@ -243,10 +243,100 @@ Notes:
 - `filterable` defines filter UI. `type` can be `search` or `select`; `mode` can be `self` or `relation`.
 - Relation tokens like `author.name_eng` are supported in `columns` and the service.
 
+## Model Appends & Computed Attributes
+
+Computed attributes should be defined the Laravel way using Eloquent `Attribute` accessors, and included in JSON responses via the model’s `$appends` property.
+
+- Define an accessor whose method name is the camelCase version of the attribute; it will serialize as snake_case (e.g., `fullName()` → `full_name`).
+- Add the snake_case attribute key to `$appends` so it’s present in API responses.
+- Declare dependencies so computed attributes are correct even when their base columns are not requested via `columns`:
+  - Add `protected array $computedAttributeDependencies = [ 'attr' => ['dep1','dep2',...] ];` to the model.
+  - When a computed attribute is requested (or appended), the query auto‑selects its dependencies. Any auto‑selected dependency columns are hidden from the JSON unless explicitly requested in `columns`.
+
+Example:
+```php
+use Illuminate\Database\Eloquent\Casts\Attribute;
+
+class Person extends BaseModel
+{
+  protected $appends = ['full_name'];
+
+  protected array $computedAttributeDependencies = [
+    'full_name' => ['first_name_eng', 'middle_name_eng', 'last_name_eng'],
+  ];
+
+  protected function fullName(): Attribute
+  {
+    return Attribute::make(
+      get: fn () => collect([
+        $this->first_name_eng,
+        $this->middle_name_eng,
+        $this->last_name_eng,
+      ])->filter()->join(' ')
+    );
+  }
+}
+```
+
+With this setup:
+- `columns=full_name` returns only `full_name` (dependencies are fetched but hidden).
+- If `full_name` is in `$appends`, responses include `full_name` even when you request other columns; dependencies are fetched automatically.
+
+## Validation Rules
+
+Models can expose validation rules in a split, ergonomic form. The package’s validator prefers these methods when present and falls back to a legacy `rules()` if needed.
+
+- `baseRules(): array` — shared constraints that apply to both create and update.
+- `rulesForCreate(): array` — create‑specific requirements (e.g., required fields, unique constraints).
+- `rulesForUpdate(?int $id = null): array` — update‑specific rules; receive the current record id to handle uniqueness (e.g., `Rule::unique(...)->ignore($id)`).
+- Optional: `validationMessages(): array` — custom error messages.
+
+Example:
+```php
+use Illuminate\Validation\Rule;
+
+class Person extends BaseModel
+{
+  public static function baseRules(): array
+  {
+    return [
+      'first_name_eng' => ['sometimes', 'string', 'max:255'],
+      'last_name_eng'  => ['sometimes', 'string', 'max:255'],
+      'gender'         => ['nullable', 'in:M,F'],
+      'country_id'     => ['nullable', 'integer', 'exists:countries,id'],
+    ];
+  }
+
+  public static function rulesForCreate(): array
+  {
+    $rules = static::baseRules();
+    $rules['first_name_eng'] = ['required', 'string', 'max:255'];
+    $rules['last_name_eng']  = ['required', 'string', 'max:255'];
+    $rules['id']             = ['sometimes', 'integer', 'unique:people,id'];
+    return $rules;
+  }
+
+  public static function rulesForUpdate(?int $id = null): array
+  {
+    $rules = static::baseRules();
+    $rules['id'] = $id !== null
+      ? ['required', 'integer', Rule::unique('people', 'id')->ignore($id)]
+      : ['required', 'integer'];
+    return $rules;
+  }
+}
+```
+
+How it’s used:
+- The Generic API calls the model validator for you: `BaseModel::validate($request, $id)`.
+- On POST (create), `rulesForCreate()` is applied; on PUT (update), `rulesForUpdate($id)` is applied.
+
+If you prefer a single method, you can still implement `rules(?int $id = null): array` — the validator will fall back to it when the split methods are not present.
+
 ## Example Data Requests
 - List with relation fields, sort, and pagination:
 ```bash
-curl "http://localhost/api/gapi/book?columns=id,title,author.name_eng&with=author:name_eng&id&sort=-created_at&per_page=10"
+curl "http://localhost/api/gapi/book?columns=id,title&with=author:name_eng&id&sort=-created_at&per_page=10"
 ```
 - Fetch a single record with a relation:
 ```bash

@@ -1,7 +1,7 @@
 {
   "form": {
     "fields": "on",
-    "validations": "on",
+    "rules": "on",
     "createLink": "on",
     "numberOfColumns": 3,
     "button": ["create", "edit"]

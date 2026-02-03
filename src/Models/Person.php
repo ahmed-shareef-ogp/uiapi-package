@@ -16,7 +16,6 @@ class Person extends BaseModel
 
     protected $appends = ['full_name'];
 
-    // Declare computed attribute dependencies for auto-select
     protected array $computedAttributeDependencies = [
         'full_name' => ['first_name_eng', 'middle_name_eng', 'last_name_eng'],
     ];
@@ -54,7 +53,7 @@ class Person extends BaseModel
                     'type' => 'number',
                     'displayType' => 'text',
                     'inputType' => 'textField',
-                    'formField' => true,
+                    'formField' => false,
                     'fieldComponent' => 'textInput',
                     'validationRule' => 'required|integer|unique:entries,id',
                     'sortable' => true,
@@ -93,7 +92,7 @@ class Person extends BaseModel
                     'type' => 'string',
                     'displayType' => 'text',
                     'inputType' => 'textField',
-                    'formField' => false,
+                    'formField' => true,
                     'fieldComponent' => 'textInput',
                     'validationRule' => 'required|string|max:255',
                     'sortable' => true,
@@ -165,8 +164,9 @@ class Person extends BaseModel
                     'lang' => ['en', 'dv'],
                     'displayType' => 'chip',
                     'inputType' => 'select',
+                    'formField' => true,
                     'inlineEditable' => true,
-                    'displayProps' => [
+                    'chip' => [
                         'M' => [
                             'label' => 'Male',
                             'color' => 'primary',
@@ -178,7 +178,7 @@ class Person extends BaseModel
                             'prependIcon' => 'users',
                         ],
                     ],
-                    'filterable' => [
+                    'select' => [
                         'type' => 'select',
                         'label' => ['dv' => 'ޖިންސު', 'en' => 'Gender'],
                         'mode' => 'self',
@@ -222,8 +222,7 @@ class Person extends BaseModel
                     'inputType' => 'select',
                     'formField' => true,
                     'lang' => ['en', 'dv'],
-                    'filterable' => [
-                        'type' => 'select',
+                    'select' => [
                         'multiple' => true,
                         'label' => ['dv' => 'ޤައުމު', 'en' => 'Country'],
                         'mode' => 'relation',
@@ -318,50 +317,61 @@ class Person extends BaseModel
 
     public static function rules(?int $id = null): array
     {
+        return $id === null ? static::rulesForCreate() : static::rulesForUpdate($id);
+    }
+
+    public static function baseRules(): array
+    {
         return [
-
-            'id' => $id
-                ? ['required', 'integer', Rule::unique('people', 'id')->ignore($id)]
-                : ['sometimes', 'integer'],
-
-            // English names
-            'first_name_eng' => ['required', 'string', 'max:255'],
-            'middle_name_eng' => ['required', 'string', 'max:255'],
-            'last_name_eng' => ['required', 'string', 'max:255'],
-
-            // Dhivehi names
-            'first_name_div' => ['required', 'string', 'max:255'],
-            'middle_name_div' => ['required', 'string', 'max:255'],
-            'last_name_div' => ['required', 'string', 'max:255'],
-
-            // Dates
+            'id' => ['sometimes', 'integer'],
+            'full_name' => ['sometimes', 'string'],
+            'first_name_eng' => ['sometimes', 'string', 'max:255'],
+            'middle_name_eng' => ['nullable', 'string', 'max:255'],
+            'last_name_eng' => ['sometimes', 'string', 'max:255'],
+            'first_name_div' => ['nullable', 'string', 'max:255'],
+            'middle_name_div' => ['nullable', 'string', 'max:255'],
+            'last_name_div' => ['nullable', 'string', 'max:255'],
+            'first_name_urd' => ['nullable', 'string', 'max:255'],
+            'middle_name_urd' => ['nullable', 'string', 'max:255'],
+            'last_name_urd' => ['nullable', 'string', 'max:255'],
             'date_of_birth' => ['nullable', 'date'],
             'date_of_death' => ['nullable', 'date', 'after_or_equal:date_of_birth'],
-
-            // Gender
-            'gender' => ['nullable', Rule::in(['M', 'F'])],
-
-            // Contact info
-            'contact' => ['nullable', 'array'],
-
-            // Parent / guardian info
-            'father_name' => ['nullable', 'string', 'max:255'],
+            'gender' => ['nullable', 'in:M,F'],
             'mother_name' => ['nullable', 'string', 'max:255'],
+            'father_name' => ['nullable', 'string', 'max:255'],
             'guardian' => ['nullable', 'string', 'max:255'],
-
-            // Misc
             'remarks' => ['nullable', 'string', 'max:500'],
-
-            // IDs
             'police_pid' => ['nullable', 'integer'],
             'crpc_id' => ['nullable', 'integer'],
-
-            // Foreign keys
             'country_id' => ['nullable', 'integer', 'exists:countries,id'],
-
-            // Flags
             'is_in_custody' => ['nullable', 'boolean'],
+            'contact' => ['nullable', 'array'],
         ];
+    }
+
+    public static function rulesForCreate(): array
+    {
+        $rules = static::baseRules();
+        // Create requires key name fields
+        $rules['first_name_eng'] = ['required', 'string', 'max:255'];
+        $rules['last_name_eng'] = ['required', 'string', 'max:255'];
+        $rules['gender'] = ['required', 'in:M,F'];
+        // id must be unique if provided
+        $rules['id'] = ['sometimes', 'integer', 'unique:people,id'];
+        return $rules;
+    }
+
+    public static function rulesForUpdate(?int $id = null): array
+    {
+        $rules = static::baseRules();
+        // On update, allow partial updates
+        $rules['first_name_eng'] = ['sometimes', 'string', 'max:255'];
+        $rules['last_name_eng'] = ['sometimes', 'string', 'max:255'];
+        // id must be present and remain unique (ignore self when provided)
+        $rules['id'] = $id !== null
+            ? ['required', 'integer', Rule::unique('people', 'id')->ignore($id)]
+            : ['required', 'integer'];
+        return $rules;
     }
 
     public static function validationMessages(): array

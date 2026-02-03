@@ -176,7 +176,39 @@ abstract class BaseModel extends Model
         }
 
         $rules = [];
-        if (method_exists(static::class, 'rules')) {
+        // Prefer new-style split rules when available
+        try {
+            if ($id === null && method_exists(static::class, 'rulesForCreate')) {
+                try {
+                    $rules = static::rulesForCreate();
+                } catch (\Throwable $e) {
+                    $rules = [];
+                }
+            } elseif ($id !== null && method_exists(static::class, 'rulesForUpdate')) {
+                try {
+                    $rules = static::rulesForUpdate($id);
+                } catch (\ArgumentCountError $e) {
+                    try {
+                        $rules = static::rulesForUpdate();
+                    } catch (\Throwable $e2) {
+                        $rules = [];
+                    }
+                } catch (\Throwable $e) {
+                    $rules = [];
+                }
+            }
+            if (empty($rules) && method_exists(static::class, 'baseRules')) {
+                try {
+                    $rules = static::baseRules();
+                } catch (\Throwable $e) {
+                    $rules = [];
+                }
+            }
+        } catch (\Throwable $e) {
+            // fall through to legacy rules() resolution
+        }
+
+        if (empty($rules) && method_exists(static::class, 'rules')) {
             try {
                 // Try static with id
                 $rules = static::rules($id);

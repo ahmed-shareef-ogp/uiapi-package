@@ -1,19 +1,23 @@
 <?php
-
 namespace Ogp\UiApi\Http\Controllers;
 
-use Illuminate\Database\Eloquent\ModelNotFoundException;
-use Illuminate\Http\Request;
-use Illuminate\Pagination\Paginator;
-use Illuminate\Routing\Controller as BaseController;
 use Illuminate\Support\Str;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Pagination\Paginator;
+use Illuminate\Database\QueryException;
+use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\Response;
+use Illuminate\Routing\Controller as BaseController;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class GenericApiController extends BaseController
 {
     public function index(Request $request, string $model)
     {
         $requestParams = array_change_key_case($request->all(), CASE_LOWER);
-        $modelClass = $this->resolveModelClass($model);
+        $modelClass    = $this->resolveModelClass($model);
         if (! $modelClass) {
             return response()->json(['error' => 'Model not found'], 400);
         }
@@ -29,7 +33,7 @@ class GenericApiController extends BaseController
             ->sort($requestParams['sort'] ?? null);
 
         $perPage = isset($requestParams['per_page']) ? (int) $requestParams['per_page'] : null;
-        $page = isset($requestParams['page']) ? (int) $requestParams['page'] : null;
+        $page    = isset($requestParams['page']) ? (int) $requestParams['page'] : null;
         $records = $modelClass::paginateFromRequest(
             $query,
             $requestParams['pagination'] ?? null,
@@ -41,16 +45,16 @@ class GenericApiController extends BaseController
             // Build list of auto-added foreign keys (belongsTo) to hide from JSON output
             $autoHidden = [];
             // Also hide auto-included computed attribute dependencies
-            $columnsParam = $requestParams['columns'] ?? null;
+            $columnsParam  = $requestParams['columns'] ?? null;
             $requestedCols = is_string($columnsParam) && $columnsParam !== ''
-                ? array_values(array_filter(array_map('trim', explode(',', $columnsParam)), fn ($c) => $c !== ''))
+                ? array_values(array_filter(array_map('trim', explode(',', $columnsParam)), fn($c) => $c !== ''))
                 : [];
             if (isset($requestParams['with']) && is_string($requestParams['with'])) {
                 try {
                     $modelInstance = new $modelClass;
                     foreach (explode(',', $requestParams['with']) as $spec) {
                         [$path] = array_pad(explode(':', $spec, 2), 2, null);
-                        $path = is_string($path) ? trim($path) : '';
+                        $path   = is_string($path) ? trim($path) : '';
                         if ($path === '') {
                             continue;
                         }
@@ -98,7 +102,7 @@ class GenericApiController extends BaseController
             }
 
             $effectivePerPage = $perPage ?? $records->perPage();
-            $lastPage = (int) max(1, (int) ceil(($total > 0 ? $total : 1) / max(1, (int) $effectivePerPage)));
+            $lastPage         = (int) max(1, (int) ceil(($total > 0 ? $total : 1) / max(1, (int) $effectivePerPage)));
 
             // Hide auto-included foreign keys from serialized output
             $items = array_map(function ($m) use ($autoHidden) {
@@ -110,29 +114,29 @@ class GenericApiController extends BaseController
             }, $records->items());
 
             return response()->json([
-                'data' => $items,
+                'data'       => $items,
                 'pagination' => [
                     'current_page' => $records->currentPage(),
-                    'first_page' => 1,
-                    'last_page' => $lastPage,
-                    'per_page' => $effectivePerPage,
-                    'total' => $total,
+                    'first_page'   => 1,
+                    'last_page'    => $lastPage,
+                    'per_page'     => $effectivePerPage,
+                    'total'        => $total,
                 ],
             ]);
         }
 
         // Non-paginated response; hide auto-included foreign keys if any
-        $autoHidden = [];
-        $columnsParam = $requestParams['columns'] ?? null;
+        $autoHidden    = [];
+        $columnsParam  = $requestParams['columns'] ?? null;
         $requestedCols = is_string($columnsParam) && $columnsParam !== ''
-            ? array_values(array_filter(array_map('trim', explode(',', $columnsParam)), fn ($c) => $c !== ''))
+            ? array_values(array_filter(array_map('trim', explode(',', $columnsParam)), fn($c) => $c !== ''))
             : [];
         if (isset($requestParams['with']) && is_string($requestParams['with'])) {
             try {
                 $modelInstance = new $modelClass;
                 foreach (explode(',', $requestParams['with']) as $spec) {
                     [$path] = array_pad(explode(':', $spec, 2), 2, null);
-                    $path = is_string($path) ? trim($path) : '';
+                    $path   = is_string($path) ? trim($path) : '';
                     if ($path === '') {
                         continue;
                     }
@@ -189,7 +193,7 @@ class GenericApiController extends BaseController
     public function show(Request $request, string $model, int $id)
     {
         $requestParams = array_change_key_case($request->all(), CASE_LOWER);
-        $modelClass = $this->resolveModelClass($model);
+        $modelClass    = $this->resolveModelClass($model);
         if (! $modelClass) {
             return response()->json(['error' => 'Model not found'], 400);
         }
@@ -215,37 +219,77 @@ class GenericApiController extends BaseController
         $modelClass = $this->resolveModelClass($model);
 
         if (! $modelClass) {
-            return response()->json(['error' => 'Model not found'], 400);
+            return response()->json([
+                'message' => 'Invalid resource type.',
+            ], Response::HTTP_BAD_REQUEST);
         }
 
-        // Centralized validation
-        $validated = $modelClass::validate($request->all());
+        try {
+            return DB::transaction(function () use ($request, $modelClass) {
 
-        // Creation using validated data only
-        $record = $modelClass::createFromArray(
-            $validated,
-            $request->user() ?: null
-        );
+                // Centralized validation
+            $validated = $modelClass::validate($request);
 
-        // Optional pivot handling
-        $modelClass::handlePivots($request, $record);
+                // Create record
+                $record = $modelClass::createFromArray(
+                    $validated,
+                    $request->user()
+                );
 
-        // Handle file uploads if applicable
-        $modelClass::handleFiles($request, $record, $request->user() ?: null);
+                // Optional pivot handling
+                $modelClass::handlePivots($request, $record);
 
-        // Optional file handling (host app concern)
-        if (class_exists('App\\Services\\FileUploadService')) {
-            $normalized = class_basename($modelClass);
+                // Model-level file handling
+                $modelClass::handleFiles($request, $record, $request->user());
 
-            app(\App\Services\FileUploadService::class)->handle(
-                $request,
-                $record,
-                $normalized,
-                $request->user() ?? null
-            );
+                // Host app file service
+                if (class_exists(\App\Services\FileUploadService::class)) {
+                    app(\App\Services\FileUploadService::class)->handle(
+                        $request,
+                        $record,
+                        class_basename($modelClass),
+                        $request->user()
+                    );
+                }
+
+                return response()->json([
+                    'message' => class_basename($modelClass) . ' created successfully.',
+                    'data'    => $record,
+                ], Response::HTTP_CREATED);
+            });
+
+        } catch (ValidationException $e) {
+            // Validation errors: return model-defined messages
+            return response()->json([
+                'message' => 'Validation failed.',
+                'errors'  => $e->errors(),
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+
+        } catch (QueryException $e) {
+            // DB constraint / SQL errors
+            Log::error('Database error while creating record', [
+                'model'    => $modelClass,
+                'error'    => $e->getMessage(),
+                'sql'      => $e->getSql(),
+                'bindings' => $e->getBindings(),
+            ]);
+
+            return response()->json([
+                'message' => 'Unable to save the record.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+
+        } catch (\Throwable $e) {
+            // Any other unexpected error
+            Log::critical('Unexpected error while creating record', [
+                'model' => $modelClass,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'message' => 'Something went wrong while processing your request.',
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
-
-        return response()->json($record, 201);
     }
 
     public function update(Request $request, string $model, int $id)
@@ -257,23 +301,52 @@ class GenericApiController extends BaseController
         }
 
         $record = $modelClass::findOrFail($id);
+        try {
+            return DB::transaction(function () use ($request, $modelClass, $record) {
+                // Centralized, model-driven validation
+                $validated = $modelClass::validate($request, $record->id);
 
-        // Centralized, model-driven validation
-        $validated = $modelClass::validate(
-            $request->all(),
-            $record->id
-        );
+                // Update using validated data only
+                $record = $record->updateFromArray(
+                    $validated,
+                    $request->user()
+                );
 
-        // Update using validated data only
-        $record = $record->updateFromArray(
-            $validated,
-            $request->user()
-        );
+                // Handle file uploads on update if applicable
+                $modelClass::handleFiles($request, $record, $request->user() ?: null);
 
-        // Handle file uploads on update if applicable
-        $modelClass::handleFiles($request, $record, $request->user() ?: null);
+                return response()->json($record, 200);
+            });
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            // Validation errors: return model-defined messages
+            return response()->json([
+                'message' => 'Validation failed.',
+                'errors'  => $e->errors(),
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        } catch (QueryException $e) {
+            // DB constraint / SQL errors
+            Log::error('Database error while updating record', [
+                'model'    => $modelClass,
+                'error'    => $e->getMessage(),
+                'sql'      => method_exists($e, 'getSql') ? $e->getSql() : null,
+                'bindings' => method_exists($e, 'getBindings') ? $e->getBindings() : null,
+            ]);
 
-        return response()->json($record, 200);
+            return response()->json([
+                'message' => 'Unable to update the record.',
+            ], Response::HTTP_UNPROCESSABLE_ENTITY);
+        } catch (\Throwable $e) {
+            // Any other unexpected error
+            Log::critical('Unexpected error while updating record', [
+                'model' => $modelClass,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'message' => 'Something went wrong while processing your request.',
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+        }
     }
 
     public function destroy(string $model, int $id)
@@ -304,7 +377,7 @@ class GenericApiController extends BaseController
         $namespaces = ['Ogp\\UiApi\\Models\\', 'App\\Models\\'];
         foreach ($names as $normalized) {
             foreach ($namespaces as $ns) {
-                $fqcn = $ns.$normalized;
+                $fqcn = $ns . $normalized;
                 if (class_exists($fqcn)) {
                     return $fqcn;
                 }
