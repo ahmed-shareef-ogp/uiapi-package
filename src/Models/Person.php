@@ -168,12 +168,12 @@ class Person extends BaseModel
                     'inlineEditable' => true,
                     'chip' => [
                         'M' => [
-                            'label' => 'Male',
+                            'label' => ['dv' => 'ފިރިހެން', 'en' => 'Maale'],
                             'color' => 'primary',
                             'prependIcon' => 'user',
                         ],
                         'F' => [
-                            'label' => 'Female',
+                            'label' => ['dv' => 'އަންހެނެ', 'en' => 'Femaale'],
                             'color' => 'success',
                             'prependIcon' => 'users',
                         ],

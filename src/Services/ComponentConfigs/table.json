@@ -1,7 +1,7 @@
 {
   "table": {
     "headers": "on",
-    "filters": "on",
+    "filters": "off",
     "pagination": "on",
     "datalink": "on",
     "button": ["create", "edit", "delete"],

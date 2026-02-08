@@ -604,8 +604,13 @@ class ComponentConfigService
                     if (array_key_exists('displayType', $relDef)) {
                         $header['displayType'] = (string) $relDef['displayType'];
                     }
-                    if (array_key_exists('displayProps', $relDef) && is_array($relDef['displayProps'])) {
-                        $header['displayProps'] = $relDef['displayProps'];
+                    // New structure: attach config under the displayType key (e.g., 'chip')
+                    if (array_key_exists('displayType', $relDef)) {
+                        $dt = (string) $relDef['displayType'];
+                        $cfg = $relDef[$dt] ?? ($relDef['displayProps'] ?? null); // legacy fallback
+                        if (is_array($cfg)) {
+                            $header[$dt] = $this->normalizeDisplayConfig($dt, $cfg, $lang);
+                        }
                     }
                     if (array_key_exists('inlineEditable', $relDef)) {
                         $header['inlineEditable'] = (bool) $relDef['inlineEditable'];
@@ -639,8 +644,12 @@ class ComponentConfigService
                     if (array_key_exists('displayType', $custom)) {
                         $header['displayType'] = (string) $custom['displayType'];
                     }
-                    if (array_key_exists('displayProps', $custom) && is_array($custom['displayProps'])) {
-                        $header['displayProps'] = $custom['displayProps'];
+                    if (array_key_exists('displayType', $custom)) {
+                        $cdt = (string) $custom['displayType'];
+                        $ccfg = $custom[$cdt] ?? ($custom['displayProps'] ?? null);
+                        if (is_array($ccfg)) {
+                            $header[$cdt] = $this->normalizeDisplayConfig($cdt, $ccfg, $lang);
+                        }
                     }
                     if (array_key_exists('inlineEditable', $custom)) {
                         $header['inlineEditable'] = (bool) $custom['inlineEditable'];
@@ -682,8 +691,12 @@ class ComponentConfigService
             if (array_key_exists('displayType', $def)) {
                 $header['displayType'] = (string) $def['displayType'];
             }
-            if (array_key_exists('displayProps', $def) && is_array($def['displayProps'])) {
-                $header['displayProps'] = $def['displayProps'];
+            if (array_key_exists('displayType', $def)) {
+                $dt = (string) $def['displayType'];
+                $cfg = $def[$dt] ?? ($def['displayProps'] ?? null); // legacy fallback
+                if (is_array($cfg)) {
+                    $header[$dt] = $this->normalizeDisplayConfig($dt, $cfg, $lang);
+                }
             }
             if (array_key_exists('inlineEditable', $def)) {
                 $header['inlineEditable'] = (bool) $def['inlineEditable'];
@@ -706,8 +719,12 @@ class ComponentConfigService
                 if (array_key_exists('displayType', $custom)) {
                     $header['displayType'] = (string) $custom['displayType'];
                 }
-                if (array_key_exists('displayProps', $custom) && is_array($custom['displayProps'])) {
-                    $header['displayProps'] = $custom['displayProps'];
+                if (array_key_exists('displayType', $custom)) {
+                    $cdt = (string) $custom['displayType'];
+                    $ccfg = $custom[$cdt] ?? ($custom['displayProps'] ?? null);
+                    if (is_array($ccfg)) {
+                        $header[$cdt] = $this->normalizeDisplayConfig($cdt, $ccfg, $lang);
+                    }
                 }
                 if (array_key_exists('inlineEditable', $custom)) {
                     $header['inlineEditable'] = (bool) $custom['inlineEditable'];
@@ -1522,6 +1539,35 @@ class ComponentConfigService
         return $normalized[0];
     }
 
+    /**
+     * Normalize display-type specific configs for headers.
+     * For 'chip', resolve per-option label using the request lang (fallback to 'dv', then 'en').
+     */
+    protected function normalizeDisplayConfig(string $displayType, array $config, string $lang): array
+    {
+        $type = strtolower($displayType);
+        if ($type === 'chip') {
+            $out = [];
+            foreach ($config as $key => $opt) {
+                if (! is_array($opt)) {
+                    $out[$key] = $opt;
+                    continue;
+                }
+                $optOut = $opt;
+                $label = $opt['label'] ?? null;
+                if (is_array($label)) {
+                    $optOut['label'] = (string) ($label[$lang] ?? $label['dv'] ?? $label['en'] ?? reset($label) ?? '');
+                } elseif (is_string($label) && $label !== '') {
+                    $optOut['label'] = $label;
+                }
+                $out[$key] = $optOut;
+            }
+            return $out;
+        }
+
+        return $config;
+    }
+
     public function buildFilters(array $columnsSchema, string $modelName, string $lang, ?array $allowedFilters = null): array
     {
         $this->logDebug('Entering buildFilters', ['method' => __METHOD__, 'model' => $modelName]);
@@ -1925,13 +1971,13 @@ class ComponentConfigService
             }
 
             if ($allStrings) {
-                // Filter list to only wanted items by name/type/label
+                // Filter list to only wanted items by key/name/type/label
                 $wanted = array_values(array_unique(array_map('strval', $overrideVal)));
                 $wantedLower = array_map('strtolower', $wanted);
                 $filtered = [];
                 foreach ($original as $it) {
                     if (is_array($it)) {
-                        $candidate = (string) ($it['name'] ?? $it['type'] ?? $it['label'] ?? '');
+                        $candidate = (string) ($it['key'] ?? $it['name'] ?? $it['type'] ?? $it['label'] ?? '');
                         $candidateLower = strtolower($candidate);
                         if ($candidate !== '' && in_array($candidateLower, $wantedLower, true)) {
                             $filtered[] = $it;
@@ -1948,7 +1994,31 @@ class ComponentConfigService
             }
 
             if ($hasAssoc) {
-                // Merge override items with existing list using 'key' match; append new items
+                // For fields overrides in noModel, restrict to provided keys and merge properties
+                if ($targetKey === 'fields') {
+                    $merged = [];
+                    foreach ($overrideVal as $ov) {
+                        if (! is_array($ov)) {
+                            continue;
+                        }
+                        $ovKey = (string) ($ov['key'] ?? '');
+                        $existing = null;
+                        if ($ovKey !== '') {
+                            foreach ($original as $item) {
+                                if (is_array($item) && array_key_exists('key', $item) && (string) $item['key'] === $ovKey) {
+                                    $existing = $item;
+                                    break;
+                                }
+                            }
+                        }
+                        $merged[] = $existing ? array_merge($existing, $ov) : $ov;
+                    }
+                    $sectionPayload[$targetKey] = $merged;
+
+                    continue;
+                }
+
+                // Default behavior: merge override items with existing list using 'key' match; append new items
                 $merged = $original;
                 foreach ($overrideVal as $ov) {
                     if (! is_array($ov)) {
@@ -2327,7 +2397,7 @@ class ComponentConfigService
                     $dt = (string) $relDef['displayType'];
                     $cfg = $relDef[$dt] ?? ($relDef['displayProps'] ?? null); // legacy fallback
                     if (is_array($cfg)) {
-                        $header[$dt] = $cfg;
+                        $header[$dt] = $this->normalizeDisplayConfig($dt, $cfg, $lang);
                     }
                 }
                 if ($relDef && array_key_exists('inlineEditable', $relDef)) {
@@ -2400,7 +2470,7 @@ class ComponentConfigService
                 $dt = (string) $def['displayType'];
                 $cfg = $def[$dt] ?? ($def['displayProps'] ?? null); // legacy fallback
                 if (is_array($cfg)) {
-                    $header[$dt] = $cfg;
+                    $header[$dt] = $this->normalizeDisplayConfig($dt, $cfg, $lang);
                 }
             }
             if (array_key_exists('inlineEditable', $def)) {
@@ -2429,7 +2499,7 @@ class ComponentConfigService
                     $cdt = (string) $custom['displayType'];
                     $ccfg = $custom[$cdt] ?? ($custom['displayProps'] ?? null);
                     if (is_array($ccfg)) {
-                        $header[$cdt] = $ccfg;
+                        $header[$cdt] = $this->normalizeDisplayConfig($cdt, $ccfg, $lang);
                     }
                 }
                 if (array_key_exists('inlineEditable', $custom)) {
