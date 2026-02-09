@@ -315,12 +315,15 @@ class ComponentConfigService
                 );
             }
 
-            // Include meta payload only if declared in view config components
+            // Include meta only when declared and not already built; apply per-view overrides
             $componentsMap = $compBlock['components'] ?? [];
-            if (is_array($componentsMap) && array_key_exists('meta', $componentsMap)) {
+            $shouldAppendMeta = is_array($componentsMap)
+                && array_key_exists('meta', $componentsMap)
+                && ! array_key_exists('meta', $componentSettings);
+            if ($shouldAppendMeta) {
                 $metaCfg = $this->loadComponentConfig('meta');
                 if (! empty($metaCfg) && isset($metaCfg['meta']) && is_array($metaCfg['meta'])) {
-                    $componentSettings['meta'] = $this->buildSectionPayloadNoModel(
+                    $metaPayload = $this->buildSectionPayloadNoModel(
                         $metaCfg['meta'],
                         $columnsSchema,
                         $effectiveTokens,
@@ -330,6 +333,13 @@ class ComponentConfigService
                         $columnCustomizations,
                         $allowedFilters
                     );
+
+                    $metaOverrides = is_array($componentsMap) ? ($componentsMap['meta'] ?? null) : null;
+                    if (is_array($metaOverrides)) {
+                        $metaPayload = $this->applyOverridesToSection($metaPayload, $metaOverrides, $lang);
+                    }
+
+                    $componentSettings['meta'] = $metaPayload;
                 }
             }
 
@@ -458,12 +468,15 @@ class ComponentConfigService
             );
         }
 
-        // Include meta payload only if declared in view config components
+        // Include meta only when declared and not already built; apply per-view overrides
         $componentsMap = $compBlock['components'] ?? [];
-        if (is_array($componentsMap) && array_key_exists('meta', $componentsMap)) {
+        $shouldAppendMeta = is_array($componentsMap)
+            && array_key_exists('meta', $componentsMap)
+            && ! array_key_exists('meta', $componentSettings);
+        if ($shouldAppendMeta) {
             $metaCfg = $this->loadComponentConfig('meta');
             if (! empty($metaCfg) && isset($metaCfg['meta']) && is_array($metaCfg['meta'])) {
-                $componentSettings['meta'] = $this->buildSectionPayload(
+                $metaPayload = $this->buildSectionPayload(
                     $metaCfg['meta'],
                     $columnsSchema,
                     $effectiveTokens,
@@ -474,6 +487,13 @@ class ComponentConfigService
                     $columnCustomizations,
                     $allowedFilters
                 );
+
+                $metaOverrides = is_array($componentsMap) ? ($componentsMap['meta'] ?? null) : null;
+                if (is_array($metaOverrides)) {
+                    $metaPayload = $this->applyOverridesToSection($metaPayload, $metaOverrides, $lang);
+                }
+
+                $componentSettings['meta'] = $metaPayload;
             }
         }
 

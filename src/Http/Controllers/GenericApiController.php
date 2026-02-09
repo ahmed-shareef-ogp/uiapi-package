@@ -315,7 +315,10 @@ class GenericApiController extends BaseController
                 // Handle file uploads on update if applicable
                 $modelClass::handleFiles($request, $record, $request->user() ?: null);
 
-                return response()->json($record, 200);
+                return response()->json([
+                    'message' => class_basename($modelClass) . ' updated successfully.',
+                    'data'    => $record,
+                ], Response::HTTP_OK);
             });
         } catch (\Illuminate\Validation\ValidationException $e) {
             // Validation errors: return model-defined messages
