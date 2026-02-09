@@ -22,7 +22,6 @@ class ComponentConfigService
 
     public function __construct()
     {
-        $this->setIncludeHiddenColumnsInHeaders(false);
         // Read logging flag safely without triggering missing-config exceptions
         $cfg = config('uiapi');
         $this->loggingEnabled = is_array($cfg) && array_key_exists('logging_enabled', $cfg)
@@ -316,6 +315,24 @@ class ComponentConfigService
                 );
             }
 
+            // Include meta payload only if declared in view config components
+            $componentsMap = $compBlock['components'] ?? [];
+            if (is_array($componentsMap) && array_key_exists('meta', $componentsMap)) {
+                $metaCfg = $this->loadComponentConfig('meta');
+                if (! empty($metaCfg) && isset($metaCfg['meta']) && is_array($metaCfg['meta'])) {
+                    $componentSettings['meta'] = $this->buildSectionPayloadNoModel(
+                        $metaCfg['meta'],
+                        $columnsSchema,
+                        $effectiveTokens,
+                        $lang,
+                        $perPage,
+                        $modelName,
+                        $columnCustomizations,
+                        $allowedFilters
+                    );
+                }
+            }
+
             $topLevelHeaders = null;
             if ($this->getIncludeTopLevelHeaders()) {
                 $topLevelHeaders = $this->buildTopLevelHeadersNoModel($columnsSchema, $effectiveTokens, $lang, $columnCustomizations);
@@ -439,6 +456,25 @@ class ComponentConfigService
                 $allowedFilters,
                 is_array($componentsMap) ? $componentsMap : null
             );
+        }
+
+        // Include meta payload only if declared in view config components
+        $componentsMap = $compBlock['components'] ?? [];
+        if (is_array($componentsMap) && array_key_exists('meta', $componentsMap)) {
+            $metaCfg = $this->loadComponentConfig('meta');
+            if (! empty($metaCfg) && isset($metaCfg['meta']) && is_array($metaCfg['meta'])) {
+                $componentSettings['meta'] = $this->buildSectionPayload(
+                    $metaCfg['meta'],
+                    $columnsSchema,
+                    $effectiveTokens,
+                    $lang,
+                    $perPage,
+                    $modelName,
+                    $modelInstance,
+                    $columnCustomizations,
+                    $allowedFilters
+                );
+            }
         }
 
         $topLevelHeaders = null;
@@ -1138,6 +1174,17 @@ class ComponentConfigService
     ): array {
         $out = [];
         foreach ($node as $key => $val) {
+            if ($key === 'crudLink') {
+                if ($val === 'on') {
+                    $out['crudLink'] = $this->buildCreateLink($modelName);
+                } elseif ($val === 'off') {
+                    // omit
+                } else {
+                    $out['crudLink'] = $val;
+                }
+
+                continue;
+            }
             if ($key === 'fields') {
                 if ($val === 'on') {
                     $out['fields'] = $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang);
@@ -1706,6 +1753,17 @@ class ComponentConfigService
     ): array {
         $out = [];
         foreach ($node as $key => $val) {
+            if ($key === 'crudLink') {
+                if ($val === 'on') {
+                    $out['crudLink'] = $this->buildCreateLink($modelName);
+                } elseif ($val === 'off') {
+                    // omit
+                } else {
+                    $out['crudLink'] = $val;
+                }
+
+                continue;
+            }
             if ($key === 'fields') {
                 if ($val === 'on') {
                     $out['fields'] = $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang, $modelInstance);

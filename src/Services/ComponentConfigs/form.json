@@ -2,7 +2,7 @@
   "form": {
     "fields": "on",
     "rules": "on",
-    "createLink": "on",
+    "createLink": "off",
     "numberOfColumns": 3,
     "button": ["create", "edit"]
   }
