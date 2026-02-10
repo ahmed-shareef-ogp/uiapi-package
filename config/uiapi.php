@@ -8,6 +8,11 @@ return [
     'route_prefix' => 'api',
     'logging_enabled' => true,
 
+    // Allow arbitrary custom keys in component overrides (view configs)
+    // When true, unknown keys like 'variables' under a component will be passed through into payloads.
+    // Default: false (ignore unknown keys in overrides)
+    'allow_custom_component_keys' => true,
+
     // Optional: allow future model binding overrides
     // 'model_bindings' => [
     //     'Person' => \Ogp\UiApi\Models\Person::class,

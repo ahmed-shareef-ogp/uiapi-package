@@ -1,16 +1,16 @@
 <?php
 namespace Ogp\UiApi\Http\Controllers;
 
-use Illuminate\Support\Str;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\Paginator;
+use Illuminate\Routing\Controller as BaseController;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Pagination\Paginator;
-use Illuminate\Database\QueryException;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\Response;
-use Illuminate\Routing\Controller as BaseController;
-use Illuminate\Database\Eloquent\ModelNotFoundException;
 
 class GenericApiController extends BaseController
 {
@@ -228,7 +228,7 @@ class GenericApiController extends BaseController
             return DB::transaction(function () use ($request, $modelClass) {
 
                 // Centralized validation
-            $validated = $modelClass::validate($request);
+                $validated = $modelClass::validate($request);
 
                 // Create record
                 $record = $modelClass::createFromArray(
@@ -371,19 +371,34 @@ class GenericApiController extends BaseController
 
     protected function resolveModelClass(string $model): ?string
     {
+        // Try multiple normalized variants to support multi-word models via '-', '_', spaces, '.'
         $names = array_values(array_unique([
             ucfirst(strtolower($model)),
             Str::studly($model),
             Str::studly(str_replace(['-', ' ', '.'], '_', $model)),
         ]));
 
-        $namespaces = ['Ogp\\UiApi\\Models\\', 'App\\Models\\'];
-        foreach ($names as $normalized) {
-            foreach ($namespaces as $ns) {
-                $fqcn = $ns . $normalized;
-                if (class_exists($fqcn)) {
-                    return $fqcn;
-                }
+        foreach ($names as $name) {
+            $packageFqcn = 'Ogp\\UiApi\\Models\\' . $name;
+            $appFqcn     = 'App\\Models\\' . $name;
+
+            // Prefer existing files to avoid noisy autoload warnings
+            $packagePath = base_path('vendor/ogp/uiapi/src/Models/' . $name . '.php');
+            $appPath     = base_path('app/Models/' . $name . '.php');
+
+            if (file_exists($packagePath) && class_exists($packageFqcn)) {
+                return $packageFqcn;
+            }
+            if (file_exists($appPath) && class_exists($appFqcn)) {
+                return $appFqcn;
+            }
+
+            // Fallback: let autoloader resolve if possible
+            if (class_exists($packageFqcn)) {
+                return $packageFqcn;
+            }
+            if (class_exists($appFqcn)) {
+                return $appFqcn;
             }
         }
 

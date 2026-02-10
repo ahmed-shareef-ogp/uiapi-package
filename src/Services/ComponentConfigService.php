@@ -20,12 +20,17 @@ class ComponentConfigService
 
     protected bool $loggingEnabled = false;
 
+    protected bool $allowCustomComponentKeys = false;
+
     public function __construct()
     {
         // Read logging flag safely without triggering missing-config exceptions
         $cfg = config('uiapi');
         $this->loggingEnabled = is_array($cfg) && array_key_exists('logging_enabled', $cfg)
             ? (bool) $cfg['logging_enabled']
+            : false;
+        $this->allowCustomComponentKeys = is_array($cfg) && array_key_exists('allow_custom_component_keys', $cfg)
+            ? (bool) $cfg['allow_custom_component_keys']
             : false;
         $this->logDebug('ComponentConfigService initialized', ['method' => __METHOD__]);
     }
@@ -58,6 +63,16 @@ class ComponentConfigService
     protected function isLoggingEnabled(): bool
     {
         return $this->loggingEnabled === true;
+    }
+
+    public function setAllowCustomComponentKeys(bool $value): void
+    {
+        $this->allowCustomComponentKeys = $value;
+    }
+
+    public function getAllowCustomComponentKeys(): bool
+    {
+        return $this->allowCustomComponentKeys;
     }
 
     protected function logDebug(string $message, array $context = []): void
@@ -1997,6 +2012,14 @@ class ComponentConfigService
 
                     continue;
                 }
+                // If target does not exist after mapping and custom keys are disabled, skip
+                if (! array_key_exists($targetKey, $sectionPayload)) {
+                    if ($this->getAllowCustomComponentKeys()) {
+                        $sectionPayload[$overrideKey] = $overrideVal;
+                    }
+
+                    continue;
+                }
                 $sectionPayload[$targetKey] = $overrideVal;
 
                 continue;
@@ -2018,9 +2041,11 @@ class ComponentConfigService
                         break;
                     }
                 }
-                // No existing target: set directly and continue
+                // No existing target: set directly only if custom keys allowed
                 if (! array_key_exists($targetKey, $sectionPayload)) {
-                    $sectionPayload[$targetKey] = $overrideVal;
+                    if ($this->getAllowCustomComponentKeys()) {
+                        $sectionPayload[$overrideKey] = $overrideVal;
+                    }
 
                     continue;
                 }
