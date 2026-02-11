@@ -168,9 +168,14 @@ abstract class BaseModel extends Model
 
     public static function validate(Request|array $data, ?int $id = null): array
     {
+        $lang = 'dv';
+
         if ($data instanceof Request) {
             $data->headers->set('Accept', 'application/json');
             $payload = $data->all();
+
+            $candidate = strtolower((string) $data->query('lang', 'dv'));
+            $lang = in_array($candidate, ['dv', 'en'], true) ? $candidate : 'dv';
         } else {
             $payload = $data;
         }
@@ -254,11 +259,40 @@ abstract class BaseModel extends Model
             return $payload;
         }
 
-        return Validator::make(
-            $payload,
-            $rules,
-            static::validationMessages()
-        )->validate();
+        $messages = static::validationMessages();
+        $messages = static::localizeValidationMessages($messages, $lang);
+
+        return Validator::make($payload, $rules, $messages)->validate();
+    }
+
+    /**
+     * @param  array<string, mixed>  $messages
+     * @return array<string, string>
+     */
+    protected static function localizeValidationMessages(array $messages, string $lang): array
+    {
+        $localized = [];
+
+        foreach ($messages as $key => $value) {
+            if (is_string($value)) {
+                $localized[$key] = $value;
+
+                continue;
+            }
+
+            if (is_array($value)) {
+                $dv = $value['dv'] ?? null;
+                $en = $value['en'] ?? null;
+
+                $selected = $lang === 'en' ? ($en ?? $dv) : ($dv ?? $en);
+
+                if (is_string($selected)) {
+                    $localized[$key] = $selected;
+                }
+            }
+        }
+
+        return $localized;
     }
 
     public function scopeSelectColumns(Builder $query, ?string $columns): Builder

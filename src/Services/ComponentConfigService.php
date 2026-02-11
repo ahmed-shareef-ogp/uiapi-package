@@ -22,6 +22,19 @@ class ComponentConfigService
 
     protected bool $allowCustomComponentKeys = false;
 
+    /**
+     * Payload keys that may be defined as {dv,en} and should be collapsed
+     * down to the request language.
+     *
+     * @var array<int, string>
+     */
+    protected array $localizedPayloadKeys = [
+        'createTitle',
+        'editTitle',
+        'title',
+        'label',
+    ];
+
     public function __construct()
     {
         // Read logging flag safely without triggering missing-config exceptions
@@ -80,6 +93,47 @@ class ComponentConfigService
         if ($this->isLoggingEnabled()) {
             Log::debug($message, $context);
         }
+    }
+
+    protected function collapseLocalizedValue(mixed $value, string $lang): mixed
+    {
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        $hasDv = array_key_exists('dv', $value);
+        $hasEn = array_key_exists('en', $value);
+
+        if (! $hasDv && ! $hasEn) {
+            return $value;
+        }
+
+        $selected = $lang === 'en'
+            ? ($value['en'] ?? $value['dv'] ?? null)
+            : ($value['dv'] ?? $value['en'] ?? null);
+
+        return $selected ?? $value;
+    }
+
+    protected function collapseLocalizedKeys(mixed $value, string $lang): mixed
+    {
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        $result = [];
+
+        foreach ($value as $key => $item) {
+            if (is_string($key) && in_array($key, $this->localizedPayloadKeys, true)) {
+                $result[$key] = $this->collapseLocalizedValue($item, $lang);
+
+                continue;
+            }
+
+            $result[$key] = $this->collapseLocalizedKeys($item, $lang);
+        }
+
+        return $result;
     }
 
     protected function canonicalComponentName(string $key): string
@@ -383,6 +437,8 @@ class ComponentConfigService
                 $response['filters'] = $topLevelFilters;
             }
 
+            $response = $this->collapseLocalizedKeys($response, $lang);
+
             return response()->json($response);
         }
 
@@ -548,6 +604,8 @@ class ComponentConfigService
         if ($topLevelFilters !== null) {
             $response['filters'] = $topLevelFilters;
         }
+
+        $response = $this->collapseLocalizedKeys($response, $lang);
 
         return response()->json($response);
     }
@@ -1495,7 +1553,7 @@ class ComponentConfigService
 
     protected function labelFor(array $columnDef, string $field, string $lang): string
     {
-        $this->logDebug('Entering labelFor', ['method' => __METHOD__, 'field' => $field]);
+        // $this->logDebug('Entering labelFor', ['method' => __METHOD__, 'field' => $field]);
         /**
          * Label selection rules:
          * - Single-language support in `lang` → use that label.
@@ -1548,7 +1606,7 @@ class ComponentConfigService
 
     protected function keyFor(array $columnDef, string $field): string
     {
-        $this->logDebug('Entering keyFor', ['method' => __METHOD__, 'field' => $field]);
+        // $this->logDebug('Entering keyFor', ['method' => __METHOD__, 'field' => $field]);
 
         return (string) ($columnDef['key'] ?? $field);
     }

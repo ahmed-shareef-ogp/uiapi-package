@@ -14,12 +14,82 @@ use Symfony\Component\HttpFoundation\Response;
 
 class GenericApiController extends BaseController
 {
+    protected function requestLang(Request $request): string
+    {
+        $lang = strtolower((string) $request->query('lang', 'dv'));
+
+        return in_array($lang, ['dv', 'en'], true) ? $lang : 'dv';
+    }
+
+    /**
+     * @param  array{dv:string,en:string}  $messages
+     */
+    protected function localizedMessage(Request $request, array $messages): string
+    {
+        $lang = $this->requestLang($request);
+
+        return $messages[$lang] ?? $messages['dv'];
+    }
+
+    /**
+     * @return array<string, array{dv:string,en:string}>
+     */
+    protected function messageCatalog(string $modelBaseName): array
+    {
+        return [
+            'invalid_resource' => [
+                'dv' => 'މި ރިސޯސް ބާވަތް ބާޠިލުވެފައި ނުވަތަ ނުފެންނަ.',
+                'en' => 'Invalid resource type.',
+            ],
+            'model_not_found' => [
+                'dv' => 'މޮޑަލް ނުފެނުނު.',
+                'en' => 'Model not found.',
+            ],
+            'record_not_found' => [
+                'dv' => 'ރެކޯޑް ނުފެނުނު.',
+                'en' => 'Record not found.',
+            ],
+            'validation_failed' => [
+                'dv' => 'ޗެކް ނުފާސްވެއްޖެ.',
+                'en' => 'Validation failed.',
+            ],
+            'created' => [
+                'dv' => "{$modelBaseName} އުފެއްދައިފި.",
+                'en' => "{$modelBaseName} created successfully.",
+            ],
+            'updated' => [
+                'dv' => "{$modelBaseName} އަޕްޑޭޓު ކުރެވިއްޖެ.",
+                'en' => "{$modelBaseName} updated successfully.",
+            ],
+            'deleted' => [
+                'dv' => "{$modelBaseName} ފޮހެލާފި.",
+                'en' => "{$modelBaseName} deleted successfully.",
+            ],
+            'unable_save' => [
+                'dv' => 'ރެކޯޑް ސޭވް ކުރެވޭނެ ނުވޭ.',
+                'en' => 'Unable to save the record.',
+            ],
+            'unable_update' => [
+                'dv' => 'ރެކޯޑް އަޕްޑޭޓު ކުރެވޭނެ ނުވޭ.',
+                'en' => 'Unable to update the record.',
+            ],
+            'unexpected' => [
+                'dv' => 'މައްސަލައެއް ޖެހިއްޖެ. އަނބުރާ ފަހަރުގައި ބަލާލާ.',
+                'en' => 'Something went wrong while processing your request.',
+            ],
+        ];
+    }
+
     public function index(Request $request, string $model)
     {
         $requestParams = array_change_key_case($request->all(), CASE_LOWER);
         $modelClass    = $this->resolveModelClass($model);
         if (! $modelClass) {
-            return response()->json(['error' => 'Model not found'], 400);
+            $catalog = $this->messageCatalog('Resource');
+
+            return response()->json([
+                'message' => $this->localizedMessage($request, $catalog['model_not_found']),
+            ], Response::HTTP_BAD_REQUEST);
         }
 
         $query = $modelClass::query()
@@ -195,7 +265,11 @@ class GenericApiController extends BaseController
         $requestParams = array_change_key_case($request->all(), CASE_LOWER);
         $modelClass    = $this->resolveModelClass($model);
         if (! $modelClass) {
-            return response()->json(['error' => 'Model not found'], 400);
+            $catalog = $this->messageCatalog('Resource');
+
+            return response()->json([
+                'message' => $this->localizedMessage($request, $catalog['model_not_found']),
+            ], Response::HTTP_BAD_REQUEST);
         }
 
         try {
@@ -208,7 +282,11 @@ class GenericApiController extends BaseController
 
             return response()->json($record);
         } catch (ModelNotFoundException $e) {
-            return response()->json(['error' => 'Record not found'], 404);
+            $catalog = $this->messageCatalog(class_basename($modelClass));
+
+            return response()->json([
+                'message' => $this->localizedMessage($request, $catalog['record_not_found']),
+            ], Response::HTTP_NOT_FOUND);
         } catch (\Exception $e) {
             return response()->json(['error' => $e->getMessage()], 500);
         }
@@ -219,13 +297,18 @@ class GenericApiController extends BaseController
         $modelClass = $this->resolveModelClass($model);
 
         if (! $modelClass) {
+            $catalog = $this->messageCatalog('Resource');
+
             return response()->json([
-                'message' => 'Invalid resource type.',
+                'message' => $this->localizedMessage($request, $catalog['invalid_resource']),
             ], Response::HTTP_BAD_REQUEST);
         }
 
+        $modelBaseName = class_basename($modelClass);
+        $catalog = $this->messageCatalog($modelBaseName);
+
         try {
-            return DB::transaction(function () use ($request, $modelClass) {
+            return DB::transaction(function () use ($request, $modelClass, $catalog) {
 
                 // Centralized validation
                 $validated = $modelClass::validate($request);
@@ -253,7 +336,7 @@ class GenericApiController extends BaseController
                 }
 
                 return response()->json([
-                    'message' => class_basename($modelClass) . ' created successfully.',
+                    'message' => $this->localizedMessage($request, $catalog['created']),
                     'data'    => $record,
                 ], Response::HTTP_CREATED);
             });
@@ -261,7 +344,7 @@ class GenericApiController extends BaseController
         } catch (ValidationException $e) {
             // Validation errors: return model-defined messages
             return response()->json([
-                'message' => 'Validation failed.',
+                'message' => $this->localizedMessage($request, $catalog['validation_failed']),
                 'errors'  => $e->errors(),
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
 
@@ -275,7 +358,7 @@ class GenericApiController extends BaseController
             ]);
 
             return response()->json([
-                'message' => 'Unable to save the record.',
+                'message' => $this->localizedMessage($request, $catalog['unable_save']),
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
 
         } catch (\Throwable $e) {
@@ -287,7 +370,7 @@ class GenericApiController extends BaseController
             ]);
 
             return response()->json([
-                'message' => 'Something went wrong while processing your request.',
+                'message' => $this->localizedMessage($request, $catalog['unexpected']),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
@@ -297,12 +380,19 @@ class GenericApiController extends BaseController
         $modelClass = $this->resolveModelClass($model);
 
         if (! $modelClass) {
-            return response()->json(['error' => 'Model not found'], 400);
+            $catalog = $this->messageCatalog('Resource');
+
+            return response()->json([
+                'message' => $this->localizedMessage($request, $catalog['model_not_found']),
+            ], Response::HTTP_BAD_REQUEST);
         }
+
+        $modelBaseName = class_basename($modelClass);
+        $catalog = $this->messageCatalog($modelBaseName);
 
         $record = $modelClass::findOrFail($id);
         try {
-            return DB::transaction(function () use ($request, $modelClass, $record) {
+            return DB::transaction(function () use ($request, $modelClass, $catalog, $record) {
                 // Centralized, model-driven validation
                 $validated = $modelClass::validate($request, $record->id);
 
@@ -316,14 +406,14 @@ class GenericApiController extends BaseController
                 $modelClass::handleFiles($request, $record, $request->user() ?: null);
 
                 return response()->json([
-                    'message' => class_basename($modelClass) . ' updated successfully.',
+                    'message' => $this->localizedMessage($request, $catalog['updated']),
                     'data'    => $record,
                 ], Response::HTTP_OK);
             });
         } catch (\Illuminate\Validation\ValidationException $e) {
             // Validation errors: return model-defined messages
             return response()->json([
-                'message' => 'Validation failed.',
+                'message' => $this->localizedMessage($request, $catalog['validation_failed']),
                 'errors'  => $e->errors(),
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (QueryException $e) {
@@ -336,7 +426,7 @@ class GenericApiController extends BaseController
             ]);
 
             return response()->json([
-                'message' => 'Unable to update the record.',
+                'message' => $this->localizedMessage($request, $catalog['unable_update']),
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (\Throwable $e) {
             // Any other unexpected error
@@ -347,25 +437,35 @@ class GenericApiController extends BaseController
             ]);
 
             return response()->json([
-                'message' => 'Something went wrong while processing your request.',
+                'message' => $this->localizedMessage($request, $catalog['unexpected']),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
 
-    public function destroy(string $model, int $id)
+    public function destroy(Request $request, string $model, int $id)
     {
         $modelClass = $this->resolveModelClass($model);
         if (! $modelClass) {
-            return response()->json(['error' => 'Model not found'], 400);
+            $catalog = $this->messageCatalog('Resource');
+
+            return response()->json([
+                'message' => $this->localizedMessage($request, $catalog['model_not_found']),
+            ], Response::HTTP_BAD_REQUEST);
         }
+
+        $catalog = $this->messageCatalog(class_basename($modelClass));
 
         try {
             $record = $modelClass::findOrFail($id);
             $record->delete();
 
-            return response()->noContent();
+            return response()->json([
+                'message' => $this->localizedMessage($request, $catalog['deleted']),
+            ], Response::HTTP_OK);
         } catch (ModelNotFoundException $e) {
-            return response()->json(['error' => 'Record not found'], 404);
+            return response()->json([
+                'message' => $this->localizedMessage($request, $catalog['record_not_found']),
+            ], Response::HTTP_NOT_FOUND);
         }
     }
 
