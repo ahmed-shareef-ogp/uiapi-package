@@ -144,6 +144,53 @@ class ComponentConfigService
         return $canonical !== '' ? $canonical : $key;
     }
 
+    /**
+     * @return array<int, string>|null
+     */
+    protected function getColumnsForComponent(array $compBlock, string $componentName): ?array
+    {
+        $components = is_array($compBlock['components'] ?? null) ? $compBlock['components'] : [];
+        $component = is_array($components[$componentName] ?? null) ? $components[$componentName] : [];
+
+        $componentColumns = $component['columns'] ?? null;
+        if (is_array($componentColumns) && ! empty($componentColumns)) {
+            return array_values($componentColumns);
+        }
+
+        $rootColumns = $compBlock['columns'] ?? null;
+        if (is_array($rootColumns) && ! empty($rootColumns)) {
+            return array_values($rootColumns);
+        }
+
+        return null;
+    }
+
+    /**
+     * Root column customizations merged with component-specific overrides (component wins).
+     */
+    protected function getColumnCustomizationsForComponent(array $compBlock, string $componentName): ?array
+    {
+        $root = is_array($compBlock['columnCustomizations'] ?? null) ? $compBlock['columnCustomizations'] : null;
+
+        $components = is_array($compBlock['components'] ?? null) ? $compBlock['components'] : [];
+        $component = is_array($components[$componentName] ?? null) ? $components[$componentName] : [];
+        $override = is_array($component['columnCustomizations'] ?? null) ? $component['columnCustomizations'] : null;
+
+        if ($root === null && $override === null) {
+            return null;
+        }
+
+        if ($root === null) {
+            return $override;
+        }
+
+        if ($override === null) {
+            return $root;
+        }
+
+        return array_replace_recursive($root, $override);
+    }
+
     protected function resolveModel(string $modelName): ?array
     {
         $this->logDebug('Entering resolveModel', ['method' => __METHOD__, 'model' => $modelName]);
@@ -1436,6 +1483,18 @@ class ComponentConfigService
                 continue;
             }
 
+            // Apply component overrides scoped to this component key.
+            // Note: $componentsOverrides is the view config's `components` block.
+            $customizationsForComponent = $this->getColumnCustomizationsForComponent(
+                ['components' => $componentsOverrides ?? []],
+                $key
+            ) ?? $columnCustomizations;
+            $columnsForComponent = $this->getColumnsForComponent(
+                ['components' => $componentsOverrides ?? []],
+                $key
+            );
+            $columnsSubsetForComponent = $columnsForComponent ?? $columnsSubsetNormalized;
+
             $configFile = $this->loadComponentConfig($key);
             if (empty($configFile)) {
                 continue;
@@ -1446,11 +1505,11 @@ class ComponentConfigService
                 $payload = $this->buildSectionPayloadNoModel(
                     $sectionCfg,
                     $columnsSchema,
-                    $columnsSubsetNormalized,
+                    $columnsSubsetForComponent,
                     $lang,
                     $perPage,
                     $modelName,
-                    $columnCustomizations,
+                    $customizationsForComponent,
                     $allowedFilters
                 );
 
@@ -1497,7 +1556,7 @@ class ComponentConfigService
         }
         $compBlock = $viewCfg[$componentKey] ?? [];
         if (! $columnsParam) {
-            $compColumns = $compBlock['columns'] ?? [];
+            $compColumns = $this->getColumnsForComponent($compBlock, 'table');
             if (! is_array($compColumns) || empty($compColumns)) {
                 throw new \InvalidArgumentException('columns not defined in view config for component');
             }
@@ -2014,6 +2073,18 @@ class ComponentConfigService
                 continue;
             }
 
+            // Apply component overrides scoped to this component key.
+            // Note: $componentsOverrides is the view config's `components` block.
+            $customizationsForComponent = $this->getColumnCustomizationsForComponent(
+                ['components' => $componentsOverrides ?? []],
+                $key
+            ) ?? $columnCustomizations;
+            $columnsForComponent = $this->getColumnsForComponent(
+                ['components' => $componentsOverrides ?? []],
+                $key
+            );
+            $columnsSubsetForComponent = $columnsForComponent ?? $columnsSubsetNormalized;
+
             $configFile = $this->loadComponentConfig($key);
             if (empty($configFile)) {
                 continue;
@@ -2024,12 +2095,12 @@ class ComponentConfigService
                 $payload = $this->buildSectionPayload(
                     $sectionCfg,
                     $columnsSchema,
-                    $columnsSubsetNormalized,
+                    $columnsSubsetForComponent,
                     $lang,
                     $perPage,
                     $modelName,
                     $modelInstance,
-                    $columnCustomizations,
+                    $customizationsForComponent,
                     $allowedFilters
                 );
 
