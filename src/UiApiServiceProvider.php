@@ -3,12 +3,19 @@
 namespace Ogp\UiApi;
 
 use Illuminate\Support\ServiceProvider;
+use Ogp\UiApi\Console\Commands\GenerateModelCommand;
 
 class UiApiServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/uiapi.php', 'uiapi');
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                GenerateModelCommand::class,
+            ]);
+        }
     }
 
     public function boot(): void
