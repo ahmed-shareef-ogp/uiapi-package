@@ -11,6 +11,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
 abstract class BaseModel extends Model
@@ -84,7 +85,76 @@ abstract class BaseModel extends Model
             $data['updated_by'] = $user->username ?? null;
         }
 
+        $data = static::normalizeDateValues($data);
+
         return $data;
+    }
+
+    /**
+     * Convert ISO 8601 date strings to MySQL-compatible format for date/datetime columns.
+     *
+     * Inspects the model's casts() to identify date-type columns, then parses
+     * any ISO 8601 values (e.g. "2026-02-05T06:29:00.000Z") into the format
+     * expected by the cast (or Y-m-d H:i:s by default).
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected static function normalizeDateValues(array $data): array
+    {
+        $instance = new static;
+        $casts = $instance->getCasts();
+
+        foreach ($casts as $column => $castType) {
+            if (! array_key_exists($column, $data) || ! is_string($data[$column]) || $data[$column] === '') {
+                continue;
+            }
+
+            if (! static::isDateCast($castType)) {
+                continue;
+            }
+
+            try {
+                $parsed = Carbon::parse($data[$column]);
+                $data[$column] = $parsed->format(static::dateFormatFromCast($castType));
+            } catch (\Throwable) {
+                // Leave the value as-is if it cannot be parsed
+            }
+        }
+
+        return $data;
+    }
+
+    /**
+     * Determine whether a cast type represents a date/datetime column.
+     */
+    protected static function isDateCast(string $castType): bool
+    {
+        $base = Str::before($castType, ':');
+
+        return in_array($base, ['date', 'datetime', 'timestamp', 'immutable_date', 'immutable_datetime'], true);
+    }
+
+    /**
+     * Extract the target format from a cast definition.
+     *
+     * Supports "datetime:Y-m-d H:i" → "Y-m-d H:i",
+     * plain "datetime"/"timestamp" → "Y-m-d H:i:s",
+     * plain "date" → "Y-m-d".
+     */
+    protected static function dateFormatFromCast(string $castType): string
+    {
+        if (str_contains($castType, ':')) {
+            return Str::after($castType, ':');
+        }
+
+        $base = $castType;
+
+        if (in_array($base, ['date', 'immutable_date'], true)) {
+            return 'Y-m-d';
+        }
+
+        return 'Y-m-d H:i:s';
     }
 
     public function updateFromRequest(Request $request, $user = null): self

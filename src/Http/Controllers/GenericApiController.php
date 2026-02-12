@@ -38,35 +38,35 @@ class GenericApiController extends BaseController
     {
         return [
             'invalid_resource' => [
-                'dv' => 'މި ރިސޯސް ބާވަތް ބާޠިލުވެފައި ނުވަތަ ނުފެންނަ.',
+                'dv' => 'ރިސޯސުގެ ބާވަތް އަދި ރަނގަޅެއް ނޫން',
                 'en' => 'Invalid resource type.',
             ],
             'model_not_found' => [
-                'dv' => 'މޮޑަލް ނުފެނުނު.',
+                'dv' => 'މޯޑަލް ނުފެނުނޭ....',
                 'en' => 'Model not found.',
             ],
             'record_not_found' => [
-                'dv' => 'ރެކޯޑް ނުފެނުނު.',
+                'dv' => 'ރެކޯޑެއް ނުފެނުނު.',
                 'en' => 'Record not found.',
             ],
             'validation_failed' => [
-                'dv' => 'ޗެކް ނުފާސްވެއްޖެ.',
+                'dv' => 'ވެލިޑޭޝަން ފެއިލްއޭވީ. އެހެންވެ ރެކޯޑު ސޭވެއް ނުކުރެވުނު.',
                 'en' => 'Validation failed.',
             ],
             'created' => [
-                'dv' => "{$modelBaseName} އުފެއްދައިފި.",
+                'dv' => "ރެކޯޑު ހަދާ، ސޭވްވެސް ކުރެވިއްޖެ!",
                 'en' => "{$modelBaseName} created successfully.",
             ],
             'updated' => [
-                'dv' => "{$modelBaseName} އަޕްޑޭޓު ކުރެވިއްޖެ.",
+                'dv' => "ރެކޯޑު އަޕްޑޭޓް ކުރެވިއްޖެ!",
                 'en' => "{$modelBaseName} updated successfully.",
             ],
             'deleted' => [
-                'dv' => "{$modelBaseName} ފޮހެލާފި.",
+                'dv' => "ރެކޯޑު ފުހެލެވިއްޖެ!",
                 'en' => "{$modelBaseName} deleted successfully.",
             ],
             'unable_save' => [
-                'dv' => 'ރެކޯޑް ސޭވް ކުރެވޭނެ ނުވޭ.',
+                'dv' => 'މައްސަލައެއް ދިމާވެއްޖެ - ރެކޯޑު ސޭވެއް ނުކުރެވުނު!',
                 'en' => 'Unable to save the record.',
             ],
             'unable_update' => [
@@ -183,16 +183,21 @@ class GenericApiController extends BaseController
                 return $m;
             }, $records->items());
 
-            return response()->json([
-                'data'       => $items,
-                'pagination' => [
+            $response = [
+                'data' => $items,
+            ];
+
+            if (! empty($items)) {
+                $response['pagination'] = [
                     'current_page' => $records->currentPage(),
                     'first_page'   => 1,
                     'last_page'    => $lastPage,
                     'per_page'     => $effectivePerPage,
                     'total'        => $total,
-                ],
-            ]);
+                ];
+            }
+
+            return response()->json($response);
         }
 
         // Non-paginated response; hide auto-included foreign keys if any
@@ -294,6 +299,7 @@ class GenericApiController extends BaseController
 
     public function store(Request $request, string $model)
     {
+
         $modelClass = $this->resolveModelClass($model);
 
         if (! $modelClass) {
@@ -312,7 +318,7 @@ class GenericApiController extends BaseController
 
                 // Centralized validation
                 $validated = $modelClass::validate($request);
-
+                Log::info('Validated data', ['data' => $validated]);
                 // Create record
                 $record = $modelClass::createFromArray(
                     $validated,

@@ -13,6 +13,9 @@ return [
     // Default: false (ignore unknown keys in overrides)
     'allow_custom_component_keys' => true,
 
+    // Path in the host app where JS script files are stored for external function loading
+    'js_scripts_path' => 'app/Services/jsScripts',
+
     // Optional: allow future model binding overrides
     // 'model_bindings' => [
     //     'Person' => \Ogp\UiApi\Models\Person::class,

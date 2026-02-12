@@ -1026,10 +1026,12 @@ class ComponentConfigService
                     $langValue = in_array($lang, $normalized, true) ? (string) $lang : (string) $normalized[0];
                 }
             }
+            $type = (string) ($def['type'] ?? 'string');
             $fieldOut = [
                 'key' => $key,
                 'label' => $label,
                 'lang' => $langValue,
+                'type' => $type,
                 'inputType' => $inputType,
             ];
 
@@ -1135,10 +1137,12 @@ class ComponentConfigService
                         }
                     }
 
+                    $type = is_array($leafDef) ? (string) ($leafDef['type'] ?? 'string') : 'string';
                     $fieldOut = [
                         'key' => $key,
                         'label' => $label,
                         'lang' => $langValue,
+                        'type' => $type,
                         'inputType' => $inputType,
                     ];
                     if (strtolower($inputType) === 'select' && is_array($leafDef)) {
@@ -1216,10 +1220,12 @@ class ComponentConfigService
                         }
                     }
 
+                    $type = is_array($def) ? (string) ($def['type'] ?? 'string') : 'string';
                     $fieldOut = [
                         'key' => $key,
                         'label' => $label,
                         'lang' => $langValue,
+                        'type' => $type,
                         'inputType' => $inputType,
                     ];
                     if (strtolower($inputType) === 'select' && is_array($def)) {
@@ -1392,6 +1398,15 @@ class ComponentConfigService
                 } elseif ($val === 'off') {
                 } else {
                     $out['datalink'] = $val;
+                }
+
+                continue;
+            }
+            if ($key === 'functions') {
+                if (is_array($val)) {
+                    $out['functions'] = $this->resolveExternalFunctions($val);
+                } else {
+                    $out['functions'] = $val;
                 }
 
                 continue;
@@ -1608,6 +1623,124 @@ class ComponentConfigService
         $cfg = json_decode($json, true) ?: [];
 
         return $cfg;
+    }
+
+    /**
+     * Resolve external JS function references in a functions map.
+     *
+     * Each entry can be:
+     * - A plain string (inline JS body) → passed through as-is.
+     * - An object with "file" and "function" keys → the function body is
+     *   extracted from the referenced .js file in the js_scripts_path directory.
+     *
+     * @param  array<string, mixed>  $functions
+     * @return array<string, string>
+     */
+    protected function resolveExternalFunctions(array $functions): array
+    {
+        $resolved = [];
+
+        foreach ($functions as $name => $definition) {
+            if (is_string($definition)) {
+                // Inline JS body — pass through
+                $resolved[$name] = $definition;
+
+                continue;
+            }
+
+            if (is_array($definition) && isset($definition['file'], $definition['function'])) {
+                $body = $this->extractFunctionBody(
+                    (string) $definition['file'],
+                    (string) $definition['function']
+                );
+                $resolved[$name] = $body;
+
+                continue;
+            }
+
+            // Unrecognized format — pass through as-is
+            $resolved[$name] = $definition;
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * Extract the body of a named JS function from a file in the js_scripts_path directory.
+     *
+     * Looks for `function <name>(...)  { ... }` and returns only the inner body
+     * (without the function signature or outer braces).
+     *
+     * @return string The function body, or an error string if not found.
+     */
+    protected function extractFunctionBody(string $fileName, string $functionName): string
+    {
+        $base = base_path(config('uiapi.js_scripts_path', 'app/Services/jsScripts'));
+        $path = rtrim($base, '/').'/'.basename($fileName);
+
+        if (! File::exists($path)) {
+            $error = "[UiApi] JS file not found: {$fileName}";
+            $this->logDebug($error, ['method' => __METHOD__, 'file' => $fileName]);
+            Log::warning($error);
+
+            return "/* ERROR: {$error} */";
+        }
+
+        $content = File::get($path);
+
+        // Match: function <name> ( <params> ) { <body> }
+        // Uses brace-counting to handle nested braces correctly.
+        $pattern = '/\bfunction\s+' . preg_quote($functionName, '/') . '\s*\([^)]*\)\s*\{/';
+        if (! preg_match($pattern, $content, $matches, PREG_OFFSET_CAPTURE)) {
+            $error = "[UiApi] Function '{$functionName}' not found in {$fileName}";
+            $this->logDebug($error, ['method' => __METHOD__, 'file' => $fileName, 'function' => $functionName]);
+            Log::warning($error);
+
+            return "/* ERROR: {$error} */";
+        }
+
+        // Find the opening brace position
+        $openBracePos = strpos($content, '{', $matches[0][1]);
+        if ($openBracePos === false) {
+            $error = "[UiApi] Could not parse function '{$functionName}' in {$fileName}";
+            Log::warning($error);
+
+            return "/* ERROR: {$error} */";
+        }
+
+        // Count braces to find the matching closing brace
+        $depth = 0;
+        $len = strlen($content);
+        $bodyStart = $openBracePos + 1;
+        $bodyEnd = null;
+
+        for ($i = $openBracePos; $i < $len; $i++) {
+            if ($content[$i] === '{') {
+                $depth++;
+            } elseif ($content[$i] === '}') {
+                $depth--;
+                if ($depth === 0) {
+                    $bodyEnd = $i;
+                    break;
+                }
+            }
+        }
+
+        if ($bodyEnd === null) {
+            $error = "[UiApi] Unmatched braces in function '{$functionName}' in {$fileName}";
+            Log::warning($error);
+
+            return "/* ERROR: {$error} */";
+        }
+
+        $body = substr($content, $bodyStart, $bodyEnd - $bodyStart);
+
+        // Trim leading/trailing whitespace and normalize indentation
+        $lines = explode("\n", $body);
+        $trimmed = array_map('trim', $lines);
+        $trimmed = array_filter($trimmed, fn ($line) => $line !== '');
+
+        return implode(' ', $trimmed);
     }
 
     protected function labelFor(array $columnDef, string $field, string $lang): string
@@ -1988,6 +2121,15 @@ class ComponentConfigService
 
                 continue;
             }
+            if ($key === 'functions') {
+                if (is_array($val)) {
+                    $out['functions'] = $this->resolveExternalFunctions($val);
+                } else {
+                    $out['functions'] = $val;
+                }
+
+                continue;
+            }
             if (is_array($val)) {
                 $out[$key] = $this->buildSectionPayload($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $modelInstance, $columnCustomizations, $allowedFilters);
             } else {
@@ -2121,6 +2263,12 @@ class ComponentConfigService
     protected function applyOverridesToSection(array $sectionPayload, array $overrides, string $lang): array
     {
         foreach ($overrides as $overrideKey => $overrideVal) {
+            // Resolve external JS function references before applying
+            if ($overrideKey === 'functions' && is_array($overrideVal)) {
+                $sectionPayload['functions'] = $this->resolveExternalFunctions($overrideVal);
+
+                continue;
+            }
             // 1) Scalars: set value, or "off" string to remove
             if (is_scalar($overrideVal)) {
                 $targetKey = $overrideKey;
