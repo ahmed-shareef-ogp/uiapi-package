@@ -23,6 +23,19 @@ class ComponentConfigService
     protected bool $allowCustomComponentKeys = false;
 
     /**
+     * Keys consumed internally by CCS and stripped from the final payload.
+     *
+     * @var array<int, string>
+     */
+    protected array $internalKeys = [
+        'columnCustomizations',
+        'columns',
+        'per_page',
+        'filters',
+        'lang',
+    ];
+
+    /**
      * Payload keys that may be defined as {dv,en} and should be collapsed
      * down to the request language.
      *
@@ -834,7 +847,7 @@ class ComponentConfigService
                         $header['inlineEditable'] = (bool) $custom['editable'];
                     }
                     foreach ($custom as $k => $v) {
-                        if ($k === 'title' || $k === 'value') {
+                        if ($k === 'title' || $k === 'value' || $k === 'order') {
                             continue;
                         }
                         if (! array_key_exists($k, $header)) {
@@ -909,7 +922,7 @@ class ComponentConfigService
                     $header['inlineEditable'] = (bool) $custom['editable'];
                 }
                 foreach ($custom as $k => $v) {
-                    if ($k === 'title' || $k === 'value') {
+                    if ($k === 'title' || $k === 'value' || $k === 'order') {
                         continue;
                     }
                     if (! array_key_exists($k, $header)) {
@@ -919,6 +932,80 @@ class ComponentConfigService
             }
             $headers[] = $header;
         }
+
+        // Append custom columns from columnCustomizations that are not in the schema
+        if (is_array($columnCustomizations)) {
+            $existingKeys = array_map(fn (array $h) => $h['value'] ?? '', $headers);
+            foreach ($columnCustomizations as $custKey => $custProps) {
+                if (in_array($custKey, $existingKeys, true)) {
+                    continue;
+                }
+                if (! is_array($custProps)) {
+                    continue;
+                }
+
+                $label = $custProps['label'] ?? null;
+                $title = null;
+                $lang_override = null;
+                if (is_array($label)) {
+                    $title = (string) ($label[$lang] ?? $label['en'] ?? reset($label) ?? '');
+                    $otherLangs = array_values(array_filter(
+                        array_keys($label),
+                        fn ($l) => strtolower((string) $l) !== strtolower($lang)
+                    ));
+                    if (! empty($otherLangs)) {
+                        $lang_override = strtolower($otherLangs[0]);
+                    }
+                } elseif (is_string($label) && $label !== '') {
+                    $title = $label;
+                }
+                if ($title === null) {
+                    $title = Str::title(str_replace('_', ' ', $custKey));
+                }
+
+                $header = [
+                    'title' => $title,
+                    'value' => $custKey,
+                ];
+                if ($lang_override !== null) {
+                    $header['lang'] = $lang_override;
+                }
+
+                foreach ($custProps as $k => $v) {
+                    if ($k === 'label' || $k === 'title' || $k === 'value' || $k === 'order') {
+                        continue;
+                    }
+                    if ($k === 'displayType' && is_string($v)) {
+                        $header['displayType'] = $v;
+                        $dtCfg = $custProps[$v] ?? ($custProps['displayProps'] ?? null);
+                        if (is_array($dtCfg)) {
+                            $header[$v] = $this->normalizeDisplayConfig($v, $dtCfg, $lang);
+                        }
+
+                        continue;
+                    }
+                    // Skip raw display-type config keys already handled above
+                    $dt = $custProps['displayType'] ?? null;
+                    if (is_string($dt) && $k === $dt) {
+                        continue;
+                    }
+                    if ($k === 'sortable') {
+                        $header['sortable'] = (bool) $v;
+                    } elseif ($k === 'hidden') {
+                        $header['hidden'] = (bool) $v;
+                    } elseif ($k === 'inlineEditable' || $k === 'editable') {
+                        $header['inlineEditable'] = (bool) $v;
+                    } else {
+                        $header[$k] = $v;
+                    }
+                }
+
+                $headers[] = $header;
+            }
+        }
+
+        // Reorder headers based on 'order' specified in columnCustomizations
+        $headers = $this->reorderHeadersByCustomOrder($headers, $columnCustomizations);
 
         return $headers;
     }
@@ -1411,6 +1498,10 @@ class ComponentConfigService
 
                 continue;
             }
+            // Skip keys consumed internally by CCS
+            if (in_array($key, $this->internalKeys, true)) {
+                continue;
+            }
             if (is_array($val)) {
                 $out[$key] = $this->buildSectionPayloadNoModel($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $columnCustomizations, $allowedFilters);
             } else {
@@ -1803,6 +1894,62 @@ class ComponentConfigService
         return (string) ($columnDef['key'] ?? $field);
     }
 
+    /**
+     * Reorder headers based on the 'order' key in columnCustomizations.
+     *
+     * Headers with an explicit 'order' (0-based) are repositioned to that index.
+     * Headers without 'order' retain their natural position. Out-of-range values
+     * are clamped to the end. Conflicts are resolved by insertion order.
+     *
+     * @param  array<int, array<string, mixed>>  $headers
+     * @param  array<string, mixed>|null  $columnCustomizations
+     * @return array<int, array<string, mixed>>
+     */
+    protected function reorderHeadersByCustomOrder(array $headers, ?array $columnCustomizations): array
+    {
+        if (! is_array($columnCustomizations) || empty($headers)) {
+            return $headers;
+        }
+
+        // Build a map of header value => desired order
+        $orderMap = [];
+        foreach ($columnCustomizations as $key => $props) {
+            if (is_array($props) && array_key_exists('order', $props)) {
+                $orderMap[$key] = (int) $props['order'];
+            }
+        }
+
+        if (empty($orderMap)) {
+            return $headers;
+        }
+
+        // Separate headers into those with an order and those without
+        $ordered = [];
+        $unordered = [];
+        foreach ($headers as $header) {
+            $val = $header['value'] ?? '';
+            if (array_key_exists($val, $orderMap)) {
+                $ordered[] = ['header' => $header, 'order' => $orderMap[$val]];
+            } else {
+                $unordered[] = $header;
+            }
+        }
+
+        // Start with the unordered headers in their natural positions
+        $result = $unordered;
+
+        // Stable sort the ordered items by their requested position
+        usort($ordered, fn ($a, $b) => $a['order'] <=> $b['order']);
+
+        // Insert each ordered header at its requested position (clamped to bounds)
+        foreach ($ordered as $item) {
+            $pos = max(0, min($item['order'], count($result)));
+            array_splice($result, $pos, 0, [$item['header']]);
+        }
+
+        return array_values($result);
+    }
+
     protected function defaultFilterTypeForDef(array $columnDef): string
     {
         $this->logDebug('Entering defaultFilterTypeForDef', ['method' => __METHOD__]);
@@ -2130,6 +2277,10 @@ class ComponentConfigService
 
                 continue;
             }
+            // Skip keys consumed internally by CCS
+            if (in_array($key, $this->internalKeys, true)) {
+                continue;
+            }
             if (is_array($val)) {
                 $out[$key] = $this->buildSectionPayload($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $modelInstance, $columnCustomizations, $allowedFilters);
             } else {
@@ -2263,6 +2414,10 @@ class ComponentConfigService
     protected function applyOverridesToSection(array $sectionPayload, array $overrides, string $lang): array
     {
         foreach ($overrides as $overrideKey => $overrideVal) {
+            // Skip keys consumed internally by CCS
+            if (in_array($overrideKey, $this->internalKeys, true)) {
+                continue;
+            }
             // Resolve external JS function references before applying
             if ($overrideKey === 'functions' && is_array($overrideVal)) {
                 $sectionPayload['functions'] = $this->resolveExternalFunctions($overrideVal);
@@ -2813,7 +2968,7 @@ class ComponentConfigService
                         $header['inlineEditable'] = (bool) $custom['editable'];
                     }
                     foreach ($custom as $k => $v) {
-                        if ($k === 'title' || $k === 'value') {
+                        if ($k === 'title' || $k === 'value' || $k === 'order') {
                             continue;
                         }
                         if (! array_key_exists($k, $header)) {
@@ -2889,7 +3044,7 @@ class ComponentConfigService
                     $header['inlineEditable'] = (bool) $custom['editable'];
                 }
                 foreach ($custom as $k => $v) {
-                    if ($k === 'title' || $k === 'value') {
+                    if ($k === 'title' || $k === 'value' || $k === 'order') {
                         continue;
                     }
                     if (! array_key_exists($k, $header)) {
@@ -2899,6 +3054,80 @@ class ComponentConfigService
             }
             $headers[] = $header;
         }
+
+        // Append custom columns from columnCustomizations that are not in the schema
+        if (is_array($columnCustomizations)) {
+            $existingKeys = array_map(fn (array $h) => $h['value'] ?? '', $headers);
+            foreach ($columnCustomizations as $custKey => $custProps) {
+                if (in_array($custKey, $existingKeys, true)) {
+                    continue;
+                }
+                if (! is_array($custProps)) {
+                    continue;
+                }
+
+                $label = $custProps['label'] ?? null;
+                $title = null;
+                $lang_override = null;
+                if (is_array($label)) {
+                    $title = (string) ($label[$lang] ?? $label['en'] ?? reset($label) ?? '');
+                    $otherLangs = array_values(array_filter(
+                        array_keys($label),
+                        fn ($l) => strtolower((string) $l) !== strtolower($lang)
+                    ));
+                    if (! empty($otherLangs)) {
+                        $lang_override = strtolower($otherLangs[0]);
+                    }
+                } elseif (is_string($label) && $label !== '') {
+                    $title = $label;
+                }
+                if ($title === null) {
+                    $title = Str::title(str_replace('_', ' ', $custKey));
+                }
+
+                $header = [
+                    'title' => $title,
+                    'value' => $custKey,
+                ];
+                if ($lang_override !== null) {
+                    $header['lang'] = $lang_override;
+                }
+
+                foreach ($custProps as $k => $v) {
+                    if ($k === 'label' || $k === 'title' || $k === 'value' || $k === 'order') {
+                        continue;
+                    }
+                    if ($k === 'displayType' && is_string($v)) {
+                        $header['displayType'] = $v;
+                        $dtCfg = $custProps[$v] ?? ($custProps['displayProps'] ?? null);
+                        if (is_array($dtCfg)) {
+                            $header[$v] = $this->normalizeDisplayConfig($v, $dtCfg, $lang);
+                        }
+
+                        continue;
+                    }
+                    // Skip raw display-type config keys already handled above
+                    $dt = $custProps['displayType'] ?? null;
+                    if (is_string($dt) && $k === $dt) {
+                        continue;
+                    }
+                    if ($k === 'sortable') {
+                        $header['sortable'] = (bool) $v;
+                    } elseif ($k === 'hidden') {
+                        $header['hidden'] = (bool) $v;
+                    } elseif ($k === 'inlineEditable' || $k === 'editable') {
+                        $header['inlineEditable'] = (bool) $v;
+                    } else {
+                        $header[$k] = $v;
+                    }
+                }
+
+                $headers[] = $header;
+            }
+        }
+
+        // Reorder headers based on 'order' specified in columnCustomizations
+        $headers = $this->reorderHeadersByCustomOrder($headers, $columnCustomizations);
 
         return $headers;
     }

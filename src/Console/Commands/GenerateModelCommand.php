@@ -10,14 +10,16 @@ class GenerateModelCommand extends Command
 {
     protected $signature = 'uiapi:generate
         {name? : The model name (e.g. CForm, Invoice)}
-        {--migration= : Explicit path to the migration file}';
+        {--migration= : Explicit path to a Laravel migration file}
+        {--sql= : Explicit path to a raw SQL dump file (CREATE TABLE)}';
 
-    protected $description = 'Generate a Model (with apiSchema, rules, relationships) and a view config JSON from a migration file.';
+    protected $description = 'Generate a Model (with apiSchema, rules, relationships) and a view config JSON from a migration file or raw SQL dump.';
 
     public function handle(ModelGeneratorService $generator): int
     {
         $name = $this->argument('name');
         $migrationPath = $this->option('migration');
+        $sqlPath = $this->option('sql');
 
         // If no name given, prompt for it
         if (! $name || $name === '') {
@@ -31,52 +33,111 @@ class GenerateModelCommand extends Command
 
         $modelName = Str::studly($name);
 
-        // If no migration path given, prompt for it
-        if (! $migrationPath) {
-            $migrationPath = $this->ask('Enter the migration file path (relative to project root or absolute)');
-            if (! $migrationPath) {
-                $this->error('Migration file path is required.');
+        // Determine source: --sql takes precedence if both provided
+        if ($sqlPath) {
+            return $this->generateFromSql($generator, $modelName, $sqlPath);
+        }
+
+        if ($migrationPath) {
+            return $this->generateFromMigration($generator, $modelName, $migrationPath);
+        }
+
+        // Neither provided: ask the user which source to use
+        $source = $this->choice(
+            'What source do you want to generate from?',
+            ['migration' => 'Laravel migration file', 'sql' => 'Raw SQL dump (CREATE TABLE)'],
+            'migration'
+        );
+
+        if ($source === 'sql') {
+            $sqlPath = $this->ask('Enter the SQL dump file path (relative to project root or absolute)');
+            if (! $sqlPath) {
+                $this->error('SQL file path is required.');
 
                 return self::FAILURE;
             }
+
+            return $this->generateFromSql($generator, $modelName, $sqlPath);
         }
 
-        // Resolve relative paths
-        if (! str_starts_with($migrationPath, '/')) {
-            $migrationPath = base_path($migrationPath);
-        }
-
-        if (! file_exists($migrationPath)) {
-            $this->error("Migration file not found: {$migrationPath}");
+        $migrationPath = $this->ask('Enter the migration file path (relative to project root or absolute)');
+        if (! $migrationPath) {
+            $this->error('Migration file path is required.');
 
             return self::FAILURE;
         }
 
-        $this->info("Generating from migration: {$migrationPath}");
+        return $this->generateFromMigration($generator, $modelName, $migrationPath);
+    }
+
+    protected function generateFromMigration(ModelGeneratorService $generator, string $modelName, string $path): int
+    {
+        if (! str_starts_with($path, '/')) {
+            $path = base_path($path);
+        }
+
+        if (! file_exists($path)) {
+            $this->error("Migration file not found: {$path}");
+
+            return self::FAILURE;
+        }
+
+        $this->info("Generating from migration: {$path}");
         $this->info("Model name: {$modelName}");
 
         try {
-            $migrationData = $generator->parseMigration($migrationPath);
+            $data = $generator->parseMigration($path);
         } catch (\InvalidArgumentException $e) {
             $this->error($e->getMessage());
 
             return self::FAILURE;
         }
 
-        $this->info("Detected table: {$migrationData['table']}");
-        $this->info('Detected columns: ' . implode(', ', array_keys($migrationData['columns'])));
+        return $this->writeGeneratedFiles($generator, $modelName, $data);
+    }
+
+    protected function generateFromSql(ModelGeneratorService $generator, string $modelName, string $path): int
+    {
+        if (! str_starts_with($path, '/')) {
+            $path = base_path($path);
+        }
+
+        if (! file_exists($path)) {
+            $this->error("SQL file not found: {$path}");
+
+            return self::FAILURE;
+        }
+
+        $this->info("Generating from SQL dump: {$path}");
+        $this->info("Model name: {$modelName}");
+
+        try {
+            $data = $generator->parseSqlDump($path);
+        } catch (\InvalidArgumentException $e) {
+            $this->error($e->getMessage());
+
+            return self::FAILURE;
+        }
+
+        return $this->writeGeneratedFiles($generator, $modelName, $data);
+    }
+
+    protected function writeGeneratedFiles(ModelGeneratorService $generator, string $modelName, array $data): int
+    {
+        $this->info("Detected table: {$data['table']}");
+        $this->info('Detected columns: ' . implode(', ', array_keys($data['columns'])));
 
         // Foreign keys detected
-        $foreignKeys = array_filter($migrationData['columns'], fn ($col) => $col['foreign'] !== null);
+        $foreignKeys = array_filter($data['columns'], fn ($col) => $col['foreign'] !== null);
         if (! empty($foreignKeys)) {
             $this->info('Detected relationships: ' . implode(', ', array_map(
-                fn ($colName) => $colName . ' → ' . $migrationData['columns'][$colName]['foreign']['table'],
+                fn ($colName) => $colName . ' → ' . $data['columns'][$colName]['foreign']['table'],
                 array_keys($foreignKeys)
             )));
         }
 
         // Generate Model
-        $modelContent = $generator->generateModel($modelName, $migrationData);
+        $modelContent = $generator->generateModel($modelName, $data);
         $modelPath = app_path("Models/{$modelName}.php");
 
         if (file_exists($modelPath)) {
@@ -87,7 +148,6 @@ class GenerateModelCommand extends Command
                 $this->info("Model written to: {$modelPath}");
             }
         } else {
-            // Ensure directory exists
             if (! is_dir(dirname($modelPath))) {
                 mkdir(dirname($modelPath), 0755, true);
             }
@@ -96,7 +156,7 @@ class GenerateModelCommand extends Command
         }
 
         // Generate view config JSON
-        $viewConfigContent = $generator->generateViewConfig($modelName, $migrationData);
+        $viewConfigContent = $generator->generateViewConfig($modelName, $data);
         $viewConfigsPath = base_path(config('uiapi.view_configs_path', 'app/Services/viewConfigs'));
         $normalizedName = strtolower(str_replace(['-', '_', ' '], '', $modelName));
         $jsonPath = rtrim($viewConfigsPath, '/') . '/' . $normalizedName . '.json';

@@ -137,6 +137,208 @@ class ModelGeneratorService
         };
     }
 
+    // ─── SQL Dump Parsing ───────────────────────────────────────────
+
+    /**
+     * Parse a raw SQL dump file and extract column definitions.
+     *
+     * Accepts output from mysqldump --no-data or phpMyAdmin SQL export.
+     * Returns the same structure as parseMigration() so generateModel()
+     * and generateViewConfig() work unchanged.
+     *
+     * @return array{table: string, columns: array<string, array{type: string, nullable: bool, default: mixed, unique: bool, foreign: ?array{table: string, column: string}}>, timestamps: bool}
+     */
+    public function parseSqlDump(string $sqlPath): array
+    {
+        if (! file_exists($sqlPath)) {
+            throw new \InvalidArgumentException("SQL file not found: {$sqlPath}");
+        }
+
+        $content = file_get_contents($sqlPath);
+
+        $table = $this->extractTableNameFromSql($content);
+        if (! $table) {
+            throw new \InvalidArgumentException('Could not determine table name from SQL dump.');
+        }
+
+        $columns = $this->extractColumnsFromSql($content);
+        if (empty($columns)) {
+            throw new \InvalidArgumentException('No columns could be parsed from SQL dump.');
+        }
+
+        $foreignKeys = $this->extractForeignKeysFromSql($content);
+        foreach ($foreignKeys as $colName => $fk) {
+            if (isset($columns[$colName]) && $columns[$colName]['foreign'] === null) {
+                $columns[$colName]['foreign'] = $fk;
+            }
+        }
+
+        // Infer FK from _id suffix columns that have an index but no explicit constraint
+        foreach ($columns as $colName => $colDef) {
+            if ($colDef['foreign'] === null && Str::endsWith($colName, '_id')) {
+                $base = Str::beforeLast($colName, '_id');
+                $columns[$colName]['foreign'] = [
+                    'table' => Str::plural(Str::snake($base)),
+                    'column' => 'id',
+                ];
+            }
+        }
+
+        $timestamps = isset($columns['created_at']) && isset($columns['updated_at']);
+
+        return [
+            'table' => $table,
+            'columns' => $columns,
+            'timestamps' => $timestamps,
+        ];
+    }
+
+    protected function extractTableNameFromSql(string $content): ?string
+    {
+        if (preg_match('/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\']?(\w+)[`"\']?\s*\(/i', $content, $m)) {
+            return $m[1];
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array<string, array{type: string, nullable: bool, default: mixed, unique: bool, foreign: ?array{table: string, column: string}}>
+     */
+    protected function extractColumnsFromSql(string $content): array
+    {
+        // Extract the CREATE TABLE body between the parentheses
+        if (! preg_match('/CREATE\s+TABLE\s+[^(]+\((.*)\)\s*(ENGINE|DEFAULT|CHARSET|COLLATE|;)/si', $content, $m)) {
+            return [];
+        }
+
+        $body = $m[1];
+        $columns = [];
+
+        // Split by lines and process each column definition
+        $lines = preg_split('/\n/', $body);
+        foreach ($lines as $line) {
+            $line = trim($line);
+            // Skip empty lines, constraints, keys, indexes
+            if ($line === '' || preg_match('/^\s*(PRIMARY|UNIQUE|KEY|INDEX|CONSTRAINT|FOREIGN|CHECK|ADD)\s/i', $line)) {
+                continue;
+            }
+            // Skip lines that are just closing parentheses or commas
+            if (preg_match('/^\s*[),]?\s*$/', $line)) {
+                continue;
+            }
+
+            $parsed = $this->parseSqlColumnLine($line);
+            if ($parsed !== null) {
+                $columns[$parsed['name']] = [
+                    'type' => $parsed['type'],
+                    'nullable' => $parsed['nullable'],
+                    'default' => $parsed['default'],
+                    'unique' => $parsed['unique'],
+                    'foreign' => null,
+                ];
+            }
+        }
+
+        return $columns;
+    }
+
+    /**
+     * Parse a single SQL column definition line.
+     *
+     * @return array{name: string, type: string, nullable: bool, default: mixed, unique: bool}|null
+     */
+    protected function parseSqlColumnLine(string $line): ?array
+    {
+        // Remove trailing comma
+        $line = rtrim($line, ',');
+
+        // Match: `column_name` type(...) [UNSIGNED] [NOT NULL|NULL] [DEFAULT ...] [UNIQUE] ...
+        $pattern = '/^[`"\']?(\w+)[`"\']?\s+(\w+)(?:\(([^)]*)\))?\s*(.*)/i';
+        if (! preg_match($pattern, $line, $m)) {
+            return null;
+        }
+
+        $name = $m[1];
+        $sqlType = strtolower($m[2]);
+        $typeParam = $m[3] ?? '';
+        $rest = $m[4] ?? '';
+
+        $normalizedType = $this->normalizeSqlColType($sqlType, $typeParam);
+
+        // Determine nullable: NOT NULL means not nullable; otherwise nullable
+        $nullable = ! preg_match('/NOT\s+NULL/i', $rest);
+
+        // Extract default value
+        $default = null;
+        if (preg_match("/DEFAULT\s+'([^']*)'/i", $rest, $dm)) {
+            $default = $dm[1];
+        } elseif (preg_match('/DEFAULT\s+NULL/i', $rest)) {
+            $default = null;
+        } elseif (preg_match('/DEFAULT\s+(\S+)/i', $rest, $dm)) {
+            $val = rtrim($dm[1], ',');
+            if ($val !== 'NULL') {
+                $default = $val;
+            }
+        }
+
+        $unique = (bool) preg_match('/UNIQUE/i', $rest);
+
+        return [
+            'name' => $name,
+            'type' => $normalizedType,
+            'nullable' => $nullable,
+            'default' => $default,
+            'unique' => $unique,
+        ];
+    }
+
+    /**
+     * Extract explicit FOREIGN KEY constraints from ALTER TABLE or CREATE TABLE.
+     *
+     * @return array<string, array{table: string, column: string}>
+     */
+    protected function extractForeignKeysFromSql(string $content): array
+    {
+        $foreignKeys = [];
+
+        // ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY (`col`) REFERENCES `table` (`col`)
+        // Also covers inline FOREIGN KEY in CREATE TABLE
+        $pattern = '/FOREIGN\s+KEY\s*\(\s*[`"\']?(\w+)[`"\']?\s*\)\s*REFERENCES\s+[`"\']?(\w+)[`"\']?\s*\(\s*[`"\']?(\w+)[`"\']?\s*\)/i';
+        preg_match_all($pattern, $content, $matches, PREG_SET_ORDER);
+
+        foreach ($matches as $match) {
+            $foreignKeys[$match[1]] = [
+                'table' => $match[2],
+                'column' => $match[3],
+            ];
+        }
+
+        return $foreignKeys;
+    }
+
+    protected function normalizeSqlColType(string $sqlType, string $typeParam = ''): string
+    {
+        // tinyint(1) is conventionally boolean in MySQL
+        if ($sqlType === 'tinyint' && $typeParam === '1') {
+            return 'boolean';
+        }
+
+        return match ($sqlType) {
+            'int', 'integer', 'bigint', 'smallint', 'mediumint', 'tinyint' => 'integer',
+            'decimal', 'float', 'double', 'numeric', 'real' => 'number',
+            'date' => 'date',
+            'datetime', 'timestamp' => 'date',
+            'json', 'jsonb' => 'json',
+            'bool', 'boolean' => 'boolean',
+            'text', 'longtext', 'mediumtext', 'tinytext' => 'string',
+            'varchar', 'char', 'enum', 'set' => 'string',
+            'blob', 'longblob', 'mediumblob', 'tinyblob', 'binary', 'varbinary' => 'string',
+            'uuid' => 'string',
+            default => 'string',
+        };
+    }
+
     /**
      * Generate the Model PHP file content.
      */
