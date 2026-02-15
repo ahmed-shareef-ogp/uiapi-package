@@ -6,6 +6,11 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Str;
 use Ogp\UiApi\Services\ModelGeneratorService;
 
+use function Laravel\Prompts\intro;
+use function Laravel\Prompts\outro;
+use function Laravel\Prompts\progress;
+use function Laravel\Prompts\spin;
+
 class GenerateModelCommand extends Command
 {
     protected $signature = 'uiapi:generate
@@ -15,8 +20,16 @@ class GenerateModelCommand extends Command
 
     protected $description = 'Generate a Model (with apiSchema, rules, relationships) and a view config JSON from a migration file or raw SQL dump.';
 
+    /**
+     * Artificial delay (ms) between progress steps for visual feedback.
+     */
+    protected int $stepDelayMs = 300;
+
     public function handle(ModelGeneratorService $generator): int
     {
+        $this->newLine();
+        intro('  UiApi Model Generator  ');
+
         $name = $this->argument('name');
         $migrationPath = $this->option('migration');
         $sqlPath = $this->option('sql');
@@ -82,13 +95,21 @@ class GenerateModelCommand extends Command
             return self::FAILURE;
         }
 
-        $this->info("Generating from migration: {$path}");
-        $this->info("Model name: {$modelName}");
+        $this->step("Source: migration file");
+        $this->step("Model: <info>{$modelName}</info>");
+        $this->newLine();
 
-        try {
-            $data = $generator->parseMigration($path);
-        } catch (\InvalidArgumentException $e) {
-            $this->error($e->getMessage());
+        $data = spin(
+            callback: function () use ($generator, $path) {
+                usleep(600_000);
+
+                return $generator->parseMigration($path);
+            },
+            message: 'Parsing migration file...',
+        );
+
+        if (! $data) {
+            $this->error('Failed to parse migration file.');
 
             return self::FAILURE;
         }
@@ -108,13 +129,21 @@ class GenerateModelCommand extends Command
             return self::FAILURE;
         }
 
-        $this->info("Generating from SQL dump: {$path}");
-        $this->info("Model name: {$modelName}");
+        $this->step("Source: SQL dump file");
+        $this->step("Model: <info>{$modelName}</info>");
+        $this->newLine();
 
-        try {
-            $data = $generator->parseSqlDump($path);
-        } catch (\InvalidArgumentException $e) {
-            $this->error($e->getMessage());
+        $data = spin(
+            callback: function () use ($generator, $path) {
+                usleep(600_000);
+
+                return $generator->parseSqlDump($path);
+            },
+            message: 'Parsing SQL dump...',
+        );
+
+        if (! $data) {
+            $this->error('Failed to parse SQL dump.');
 
             return self::FAILURE;
         }
@@ -124,65 +153,124 @@ class GenerateModelCommand extends Command
 
     protected function writeGeneratedFiles(ModelGeneratorService $generator, string $modelName, array $data): int
     {
-        $this->info("Detected table: {$data['table']}");
-        $this->info('Detected columns: ' . implode(', ', array_keys($data['columns'])));
+        $table = $data['table'];
+        $columns = $data['columns'];
+        $columnCount = count($columns);
+        $foreignKeys = array_filter($columns, fn ($col) => $col['foreign'] !== null);
 
-        // Foreign keys detected
-        $foreignKeys = array_filter($data['columns'], fn ($col) => $col['foreign'] !== null);
-        if (! empty($foreignKeys)) {
-            $this->info('Detected relationships: ' . implode(', ', array_map(
-                fn ($colName) => $colName . ' → ' . $data['columns'][$colName]['foreign']['table'],
-                array_keys($foreignKeys)
-            )));
+        // ── Phase 1: Analysis summary (with spinner) ──────────────
+        $analysis = spin(
+            callback: function () use ($table, $columns, $foreignKeys) {
+                usleep(500_000);
+
+                return [
+                    'table' => $table,
+                    'columnCount' => count($columns),
+                    'columnNames' => array_keys($columns),
+                    'relationships' => array_map(
+                        fn ($colName) => $colName . ' → ' . $columns[$colName]['foreign']['table'],
+                        array_keys($foreignKeys)
+                    ),
+                ];
+            },
+            message: 'Analyzing schema structure...',
+        );
+
+        $this->newLine();
+        $this->step("Table: <info>{$analysis['table']}</info>");
+        $this->step("Columns ({$analysis['columnCount']}): <comment>" . implode(', ', $analysis['columnNames']) . '</comment>');
+        if (! empty($analysis['relationships'])) {
+            $this->step('Relationships: <comment>' . implode(', ', $analysis['relationships']) . '</comment>');
         }
+        $this->newLine();
 
-        // Generate Model
-        $modelContent = $generator->generateModel($modelName, $data);
+        // ── Phase 2: Generation progress bar ──────────────────────
+        $modelContent = null;
+        $viewConfigContent = null;
+
+        $steps = [
+            'Building apiSchema columns'       => fn () => null,
+            'Building validation rules'         => fn () => null,
+            'Building relationship methods'     => fn () => null,
+            'Generating Model PHP'              => function () use ($generator, $modelName, $data, &$modelContent) {
+                $modelContent = $generator->generateModel($modelName, $data);
+            },
+            'Generating view config JSON'       => function () use ($generator, $modelName, $data, &$viewConfigContent) {
+                $viewConfigContent = $generator->generateViewConfig($modelName, $data);
+            },
+            'Finalizing output'                 => fn () => null,
+        ];
+
+        $delay = $this->stepDelayMs * 1000;
+
+        progress(
+            label: 'Generating files',
+            steps: array_keys($steps),
+            callback: function (string $step) use ($steps, $delay) {
+                usleep($delay);
+                $steps[$step]();
+            },
+            hint: 'This may take a moment...',
+        );
+
+        $this->newLine();
+
+        // ── Phase 3: Write files ──────────────────────────────────
         $modelPath = app_path("Models/{$modelName}.php");
 
         if (file_exists($modelPath)) {
             if (! $this->confirm("Model file already exists at {$modelPath}. Overwrite?", false)) {
-                $this->warn('Skipped model generation.');
+                $this->warn('  Skipped model generation.');
             } else {
                 file_put_contents($modelPath, $modelContent);
-                $this->info("Model written to: {$modelPath}");
+                $this->step("Model written → <info>{$modelPath}</info>");
             }
         } else {
             if (! is_dir(dirname($modelPath))) {
                 mkdir(dirname($modelPath), 0755, true);
             }
             file_put_contents($modelPath, $modelContent);
-            $this->info("Model written to: {$modelPath}");
+            $this->step("Model written → <info>{$modelPath}</info>");
         }
 
-        // Generate view config JSON
-        $viewConfigContent = $generator->generateViewConfig($modelName, $data);
         $viewConfigsPath = base_path(config('uiapi.view_configs_path', 'app/Services/viewConfigs'));
         $normalizedName = strtolower(str_replace(['-', '_', ' '], '', $modelName));
         $jsonPath = rtrim($viewConfigsPath, '/') . '/' . $normalizedName . '.json';
 
         if (file_exists($jsonPath)) {
             if (! $this->confirm("View config already exists at {$jsonPath}. Overwrite?", false)) {
-                $this->warn('Skipped view config generation.');
+                $this->warn('  Skipped view config generation.');
             } else {
                 file_put_contents($jsonPath, $viewConfigContent);
-                $this->info("View config written to: {$jsonPath}");
+                $this->step("View config written → <info>{$jsonPath}</info>");
             }
         } else {
             if (! is_dir(dirname($jsonPath))) {
                 mkdir(dirname($jsonPath), 0755, true);
             }
             file_put_contents($jsonPath, $viewConfigContent);
-            $this->info("View config written to: {$jsonPath}");
+            $this->step("View config written → <info>{$jsonPath}</info>");
         }
 
+        // ── Phase 4: Summary ──────────────────────────────────────
         $this->newLine();
-        $this->info('Generation complete! Review the generated files and adjust:');
-        $this->line('  • Dhivehi (dv) labels marked as "TODO" in apiSchema() and view config');
-        $this->line('  • Relationship model class references');
-        $this->line('  • Validation rules for business-specific constraints');
-        $this->line('  • View config component overrides as needed');
+        outro('  Generation complete!  ');
+        $this->newLine();
+        $this->line('  <fg=yellow>Review & adjust:</>');
+        $this->line('    • Dhivehi (dv) labels marked as <comment>"TODO"</comment> in apiSchema() and view config');
+        $this->line('    • Relationship model class references');
+        $this->line('    • Validation rules for business-specific constraints');
+        $this->line('    • View config component overrides as needed');
+        $this->newLine();
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Print a styled step line with a bullet.
+     */
+    protected function step(string $message): void
+    {
+        $this->line("  <fg=cyan>▸</> {$message}");
     }
 }
