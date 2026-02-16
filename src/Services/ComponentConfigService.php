@@ -157,6 +157,276 @@ class ComponentConfigService
         return $canonical !== '' ? $canonical : $key;
     }
 
+    // ──────────────────────────────────────────────
+    //  Small private helpers (extracted duplicates)
+    // ──────────────────────────────────────────────
+
+    /**
+     * Resolve the lang value string for a column definition.
+     */
+    protected function resolveLangValue(array $def, string $lang): string
+    {
+        $langsRaw = $def['lang'] ?? null;
+        if (! is_array($langsRaw)) {
+            return '';
+        }
+
+        $normalized = array_values(array_unique(array_map(fn ($l) => (string) $l, $langsRaw)));
+        if (count($normalized) === 1) {
+            return (string) $normalized[0];
+        }
+        if (! empty($normalized)) {
+            return in_array($lang, $normalized, true) ? (string) $lang : (string) $normalized[0];
+        }
+
+        return '';
+    }
+
+    /**
+     * Build select options (items or url) from a select/filterable config block.
+     *
+     * @return array{itemTitle: string, itemValue: string, items?: array, url?: string}
+     */
+    protected function buildSelectOptions(
+        array $cfg,
+        string $key,
+        string $lang,
+        ?Model $modelInstance = null,
+        ?string $dotToken = null
+    ): array {
+        $mode = strtolower((string) ($cfg['mode'] ?? 'self'));
+        $rawItemTitle = $cfg['itemTitle'] ?? $key;
+        $itemTitle = is_array($rawItemTitle)
+            ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $key)
+            : (string) $rawItemTitle;
+        $itemValue = (string) ($cfg['itemValue'] ?? $key);
+
+        $out = [
+            'itemTitle' => $itemTitle,
+            'itemValue' => $itemValue,
+        ];
+
+        if ($mode === 'self') {
+            $items = $cfg['items'] ?? [];
+            $outItems = [];
+            if (is_array($items)) {
+                foreach (array_values($items) as $it) {
+                    if (is_array($it)) {
+                        $outItems[] = [
+                            $itemTitle => (string) ($it[$itemTitle] ?? ''),
+                            $itemValue => (string) ($it[$itemValue] ?? ''),
+                        ];
+                    } else {
+                        $outItems[] = [
+                            $itemTitle => (string) $it,
+                            $itemValue => (string) $it,
+                        ];
+                    }
+                }
+            }
+            $out['items'] = $outItems;
+        } else {
+            // Relation mode: build URL for fetching options
+            $relationship = (string) ($cfg['relationship'] ?? '');
+            $related = null;
+            if ($modelInstance instanceof Model && $relationship !== '') {
+                $related = $this->resolveRelatedModel($modelInstance, $relationship);
+            }
+            $relatedName = $related ? class_basename($related) : null;
+            if (! $relatedName) {
+                if ($relationship !== '') {
+                    $relatedName = Str::studly($relationship);
+                } elseif ($dotToken !== null && Str::contains($dotToken, '.')) {
+                    $relatedName = Str::studly(Str::before($dotToken, '.'));
+                } else {
+                    $base = $key;
+                    if (Str::endsWith($base, '_id')) {
+                        $base = Str::beforeLast($base, '_id');
+                    }
+                    $relatedName = Str::studly($base);
+                }
+            }
+            $prefix = config('uiapi.route_prefix', 'api');
+            $columnsParam = $itemValue.','.$itemTitle;
+            $sortParam = $itemTitle;
+            $out['url'] = url('/'.$prefix.'/gapi/'.$relatedName).'?columns='.$columnsParam.'&sort='.$sortParam.'&pagination=off&wrap=data';
+        }
+
+        return $out;
+    }
+
+    /**
+     * Apply column customization overrides to a single header array.
+     */
+    protected function applyCustomizationsToHeader(array $header, ?array $columnCustomizations, string $token, string $lang): array
+    {
+        $custom = is_array($columnCustomizations) ? ($columnCustomizations[$token] ?? null) : null;
+        if (! is_array($custom)) {
+            return $header;
+        }
+
+        if (array_key_exists('sortable', $custom)) {
+            $header['sortable'] = (bool) $custom['sortable'];
+        }
+        if (array_key_exists('hidden', $custom)) {
+            $header['hidden'] = (bool) $custom['hidden'];
+        }
+        if (array_key_exists('type', $custom)) {
+            $header['type'] = (string) $custom['type'];
+        }
+        if (array_key_exists('displayType', $custom)) {
+            $header['displayType'] = (string) $custom['displayType'];
+            $cdt = (string) $custom['displayType'];
+            $ccfg = $custom[$cdt] ?? ($custom['displayProps'] ?? null);
+            if (is_array($ccfg)) {
+                $header[$cdt] = $this->normalizeDisplayConfig($cdt, $ccfg, $lang);
+            }
+        }
+        if (array_key_exists('displayProps', $custom) && is_array($custom['displayProps']) && ! array_key_exists('displayType', $custom)) {
+            $header['displayProps'] = $custom['displayProps'];
+        }
+        if (array_key_exists('inlineEditable', $custom)) {
+            $header['inlineEditable'] = (bool) $custom['inlineEditable'];
+        }
+        if (array_key_exists('editable', $custom)) {
+            $header['inlineEditable'] = (bool) $custom['editable'];
+        }
+
+        foreach ($custom as $k => $v) {
+            if ($k === 'title' || $k === 'value' || $k === 'order') {
+                continue;
+            }
+            if (! array_key_exists($k, $header)) {
+                $header[$k] = $v;
+            }
+        }
+
+        return $header;
+    }
+
+    /**
+     * Build a header array from a column definition.
+     */
+    protected function buildHeaderFromDef(?array $def, string $token, string $lang, ?string $overrideTitle = null): array
+    {
+        $header = [
+            'title' => $overrideTitle ?? ($def ? $this->labelFor($def, $token, $lang) : Str::title(str_replace('_', ' ', $token))),
+            'value' => $def ? $this->keyFor($def, $token) : $token,
+            'sortable' => (bool) ($def['sortable'] ?? false),
+            'hidden' => (bool) ($def['hidden'] ?? false),
+        ];
+
+        if ($def && array_key_exists('type', $def)) {
+            $header['type'] = (string) $def['type'];
+        }
+        if ($def && array_key_exists('displayType', $def)) {
+            $header['displayType'] = (string) $def['displayType'];
+            $dt = (string) $def['displayType'];
+            $cfg = $def[$dt] ?? ($def['displayProps'] ?? null);
+            if (is_array($cfg)) {
+                $header[$dt] = $this->normalizeDisplayConfig($dt, $cfg, $lang);
+            }
+        }
+        if ($def && array_key_exists('inlineEditable', $def)) {
+            $header['inlineEditable'] = (bool) $def['inlineEditable'];
+        }
+        if ($def) {
+            $override = $this->pickHeaderLangOverride($def, $lang);
+            if ($override !== null) {
+                $header['lang'] = $override;
+            }
+        }
+
+        return $header;
+    }
+
+    /**
+     * Try to resolve a relation name from a dot-token's first segment using a model instance.
+     * Tries: exact, camelCase, and _id-stripped guessing.
+     */
+    protected function resolveRelationName(Model $model, string $segment): ?string
+    {
+        // Try exact
+        if (method_exists($model, $segment)) {
+            try {
+                $relTest = $model->{$segment}();
+            } catch (\Throwable $e) {
+                $relTest = null;
+            }
+            if ($relTest instanceof \Illuminate\Database\Eloquent\Relations\Relation) {
+                return $segment;
+            }
+        }
+
+        // Try camelCase
+        $camel = Str::camel($segment);
+        if ($camel !== $segment && method_exists($model, $camel)) {
+            try {
+                $relTest = $model->{$camel}();
+            } catch (\Throwable $e) {
+                $relTest = null;
+            }
+            if ($relTest instanceof \Illuminate\Database\Eloquent\Relations\Relation) {
+                return $camel;
+            }
+        }
+
+        // Try _id guess
+        if (Str::endsWith($segment, '_id')) {
+            $guess = Str::camel(substr($segment, 0, -3));
+            if (method_exists($model, $guess)) {
+                try {
+                    $relTest = $model->{$guess}();
+                } catch (\Throwable $e) {
+                    $relTest = null;
+                }
+                if ($relTest instanceof \Illuminate\Database\Eloquent\Relations\Relation) {
+                    return $guess;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Resolve the column definition for a dot-token (e.g. "author.name").
+     * Model mode: resolves relation -> related apiSchema -> column def.
+     * NoModel mode: looks up directly in columnsSchema.
+     *
+     * @return array{relDef: ?array, relationName: ?string}
+     */
+    protected function resolveRelationColumnDef(
+        string $token,
+        array $columnsSchema,
+        ?Model $modelInstance = null
+    ): array {
+        [$first, $rest] = array_pad(explode('.', $token, 2), 2, null);
+        if (! $rest) {
+            return ['relDef' => null, 'relationName' => null];
+        }
+
+        if ($modelInstance instanceof Model) {
+            $relationName = $this->resolveRelationName($modelInstance, $first);
+            if ($relationName) {
+                $related = $modelInstance->{$relationName}()->getRelated();
+                $relSchema = method_exists($related, 'apiSchema') ? $related->apiSchema() : [];
+                $relColumns = $relSchema['columns'] ?? [];
+
+                return ['relDef' => $relColumns[$rest] ?? null, 'relationName' => $relationName];
+            }
+
+            return ['relDef' => null, 'relationName' => null];
+        }
+
+        // NoModel: check if schema has an entry for the full dot-token
+        return ['relDef' => $columnsSchema[$token] ?? null, 'relationName' => $first];
+    }
+
+    // ──────────────────────────────────────────────
+    //  Column & component resolution
+    // ──────────────────────────────────────────────
+
     /**
      * @return array<int, string>|null
      */
@@ -208,7 +478,6 @@ class ComponentConfigService
     {
         $this->logDebug('Entering resolveModel', ['method' => __METHOD__, 'model' => $modelName]);
 
-        // Try multiple normalized variants to support multi-word models via '-', '_', spaces, '.'
         $names = array_values(array_unique([
             ucfirst(strtolower($modelName)),
             Str::studly($modelName),
@@ -220,7 +489,6 @@ class ComponentConfigService
             $packageFqcn = 'Ogp\\UiApi\\Models\\'.$name;
             $appFqcn = 'App\\Models\\'.$name;
 
-            // Avoid noisy autoload warnings by preferring existing files when possible
             $packagePath = base_path('vendor/ogp/uiapi/src/Models/'.$name.'.php');
             $appPath = base_path('app/Models/'.$name.'.php');
 
@@ -232,7 +500,6 @@ class ComponentConfigService
                 $fqcn = $appFqcn;
                 break;
             }
-            // As a fallback, accept if autoloader can resolve the class without explicit file checks
             if (class_exists($packageFqcn)) {
                 $fqcn = $packageFqcn;
                 break;
@@ -255,57 +522,33 @@ class ComponentConfigService
         return [$fqcn, $instance, $instance->apiSchema()];
     }
 
-    protected function normalizeColumnsSubset(Model $model, ?string $columns, array $columnsSchema): array
+    // ──────────────────────────────────────────────
+    //  Unified core methods (model + noModel)
+    // ──────────────────────────────────────────────
+
+    /**
+     * Normalize column tokens. Model mode validates relations; noModel is lenient.
+     */
+    protected function normalizeColumnsSubset(?Model $model, ?string $columns, array $columnsSchema): array
     {
         $columnsSubsetNormalized = null;
         $relationsFromColumns = [];
-        if ($columns) {
-            $tokens = array_filter(array_map('trim', explode(',', $columns)));
-            $columnsSubsetNormalized = [];
-            foreach ($tokens as $token) {
-                if (Str::contains($token, '.')) {
-                    [$first, $rest] = array_pad(explode('.', $token, 2), 2, null);
-                    if (! $rest) {
-                        throw new \InvalidArgumentException("Invalid columns segment '$token'");
-                    }
-                    $this->logDebug('Entering normalizeColumnsSubset', ['method' => __METHOD__]);
-                    $relationName = null;
-                    if (method_exists($model, $first)) {
-                        try {
-                            $relTest = $model->{$first}();
-                        } catch (\Throwable $e) {
-                            $relTest = null;
-                        }
-                        if ($relTest instanceof \Illuminate\Database\Eloquent\Relations\Relation) {
-                            $relationName = $first;
-                        }
-                    }
-                    if (! $relationName) {
-                        $camel = Str::camel($first);
-                        if (method_exists($model, $camel)) {
-                            try {
-                                $relTest = $model->{$camel}();
-                            } catch (\Throwable $e) {
-                                $relTest = null;
-                            }
-                            if ($relTest instanceof \Illuminate\Database\Eloquent\Relations\Relation) {
-                                $relationName = $camel;
-                            }
-                        }
-                    }
-                    if (! $relationName && Str::endsWith($first, '_id')) {
-                        $guess = Str::camel(substr($first, 0, -3));
-                        if (method_exists($model, $guess)) {
-                            try {
-                                $relTest = $model->{$guess}();
-                            } catch (\Throwable $e) {
-                                $relTest = null;
-                            }
-                            if ($relTest instanceof \Illuminate\Database\Eloquent\Relations\Relation) {
-                                $relationName = $guess;
-                            }
-                        }
-                    }
+        if (! $columns) {
+            return [$columnsSubsetNormalized, $relationsFromColumns];
+        }
+
+        $tokens = array_filter(array_map('trim', explode(',', $columns)));
+        $columnsSubsetNormalized = [];
+
+        foreach ($tokens as $token) {
+            if (Str::contains($token, '.')) {
+                [$first, $rest] = array_pad(explode('.', $token, 2), 2, null);
+                if (! $rest) {
+                    throw new \InvalidArgumentException("Invalid columns segment '$token'");
+                }
+
+                if ($model instanceof Model) {
+                    $relationName = $this->resolveRelationName($model, $first);
                     if (! $relationName) {
                         throw new \InvalidArgumentException("Unknown relation reference '$first' in columns");
                     }
@@ -321,15 +564,26 @@ class ComponentConfigService
                     $columnsSubsetNormalized[] = $first.'.'.$rest;
                     $relationsFromColumns[] = $relationName;
                 } else {
+                    // NoModel: passthrough dot tokens
+                    $columnsSubsetNormalized[] = $first.'.'.$rest;
+                    $relationsFromColumns[] = $first;
+                }
+            } else {
+                if ($model instanceof Model) {
                     if (! array_key_exists($token, $columnsSchema)) {
                         throw new \InvalidArgumentException("Column '$token' is not defined in apiSchema");
                     }
+                } elseif (! array_key_exists($token, $columnsSchema)) {
+                    // NoModel: allow passthrough for unknown tokens
                     $columnsSubsetNormalized[] = $token;
+
+                    continue;
                 }
+                $columnsSubsetNormalized[] = $token;
             }
         }
 
-        return [$columnsSubsetNormalized, array_unique($relationsFromColumns)];
+        return [$columnsSubsetNormalized, array_values(array_unique($relationsFromColumns))];
     }
 
     protected function parseWithRelations(string $fqcn, Model $model, ?string $with): array
@@ -350,10 +604,47 @@ class ComponentConfigService
         return filter_var($val, FILTER_VALIDATE_BOOL);
     }
 
+    /**
+     * Filter column tokens by language support.
+     * Model mode resolves relation schemas via the model; noModel checks columnsSchema directly.
+     */
+    protected function filterTokensByLangSupport(?Model $modelInstance, array $columnsSchema, array $tokens, string $lang): array
+    {
+        $out = [];
+        foreach ($tokens as $token) {
+            if (Str::contains($token, '.')) {
+                if ($modelInstance instanceof Model) {
+                    $resolved = $this->resolveRelationColumnDef($token, $columnsSchema, $modelInstance);
+                    $relDef = $resolved['relDef'];
+                    if ($relDef && $this->columnSupportsLang($relDef, $lang)) {
+                        $out[] = $token;
+                    }
+                } else {
+                    $def = $columnsSchema[$token] ?? null;
+                    if ($def && $this->columnSupportsLang($def, $lang)) {
+                        $out[] = $token;
+                    }
+                }
+
+                continue;
+            }
+
+            $def = $columnsSchema[$token] ?? null;
+            if ($def && $this->columnSupportsLang($def, $lang)) {
+                $out[] = $token;
+            }
+        }
+
+        return $out;
+    }
+
+    // ──────────────────────────────────────────────
+    //  Main entry point
+    // ──────────────────────────────────────────────
+
     public function index(Request $request, string $modelName)
     {
         $this->logDebug('Entering index', ['method' => __METHOD__, 'model' => $modelName]);
-        // First resolve the view component to inspect for noModel mode
         try {
             $resolvedComp = $this->resolveViewComponent(
                 $modelName,
@@ -367,8 +658,11 @@ class ComponentConfigService
         $compBlock = $resolvedComp['compBlock'];
         $columnsParam = $resolvedComp['columnsParam'];
 
-        // Branch: noModel flow -> do not resolve model/apiSchema; use columnsSchema from view config
+        // Determine noModel vs model-backed flow
         $isNoModel = (bool) ($compBlock['noModel'] ?? false);
+        $modelInstance = null;
+        $fqcn = null;
+
         if ($isNoModel) {
             $columnsSchema = is_array($compBlock['columnsSchema'] ?? null) ? $compBlock['columnsSchema'] : [];
             if (empty($columnsSchema)) {
@@ -376,161 +670,16 @@ class ComponentConfigService
                     'error' => 'noModel mode requires columnsSchema in view config',
                 ], 422);
             }
-
-            $lang = (string) ($request->query('lang') ?? 'dv');
-            if (! $this->isLangAllowedForComponent($compBlock, $lang)) {
-                return response()->json([
-                    'message' => "Language '$lang' not supported by view config",
-                    'data' => [],
-                ]);
+        } else {
+            $resolved = $this->resolveModel($modelName);
+            if (! $resolved) {
+                return response()->json(['error' => "Model '$modelName' not found or missing apiSchema()"], 422);
             }
-
-            $perPage = (int) ($request->query('per_page') ?? ($compBlock['per_page'] ?? 25));
-
-            [$columnsSubsetNormalized, $relationsFromColumns] = $this->normalizeColumnsSubsetNoModel($columnsParam, $columnsSchema);
-            $effectiveTokens = $this->filterTokensByLangSupportNoModel($columnsSchema, $columnsSubsetNormalized ?? [], $lang);
-
-            $component = (string) ($resolvedComp['componentKey'] ?? '');
-            $columnCustomizations = $this->getColumnCustomizationsFromComponent($compBlock);
-            $allowedFilters = $this->getAllowedFiltersFromComponent($compBlock);
-
-            $componentSettingsQuery = $request->query('componentSettings');
-            if (is_string($componentSettingsQuery) && $componentSettingsQuery !== '') {
-                $cfg = $this->loadComponentConfig($componentSettingsQuery);
-                if (empty($cfg)) {
-                    return response()->json([
-                        'error' => "Component config '{$componentSettingsQuery}' not found",
-                    ], 422);
-                }
-
-                $componentSettings = $this->buildComponentSettingsNoModel(
-                    $componentSettingsQuery,
-                    $columnsSchema,
-                    $effectiveTokens,
-                    $lang,
-                    $perPage,
-                    $modelName,
-                    $columnCustomizations,
-                    $allowedFilters
-                );
-            } else {
-                $componentsMap = $compBlock['components'] ?? [];
-                $componentKeys = is_array($componentsMap) ? array_keys($componentsMap) : [];
-
-                $missing = [];
-                foreach ($componentKeys as $k) {
-                    $cfg = $this->loadComponentConfig($k);
-                    if (empty($cfg)) {
-                        $missing[] = $k;
-                    }
-                }
-                if (! empty($missing)) {
-                    return response()->json([
-                        'error' => 'Component config(s) not found',
-                        'missingComponents' => $missing,
-                    ], 422);
-                }
-
-                $componentSettings = $this->buildComponentSettingsForComponentsNoModel(
-                    $componentKeys,
-                    $columnsSchema,
-                    $effectiveTokens,
-                    $lang,
-                    $perPage,
-                    $modelName,
-                    $columnCustomizations,
-                    $allowedFilters,
-                    is_array($componentsMap) ? $componentsMap : null
-                );
-            }
-
-            // Include meta only when declared and not already built; apply per-view overrides
-            $componentsMap = $compBlock['components'] ?? [];
-            $shouldAppendMeta = is_array($componentsMap)
-                && array_key_exists('meta', $componentsMap)
-                && ! array_key_exists('meta', $componentSettings);
-            if ($shouldAppendMeta) {
-                $metaCfg = $this->loadComponentConfig('meta');
-                if (! empty($metaCfg) && isset($metaCfg['meta']) && is_array($metaCfg['meta'])) {
-                    $metaPayload = $this->buildSectionPayloadNoModel(
-                        $metaCfg['meta'],
-                        $columnsSchema,
-                        $effectiveTokens,
-                        $lang,
-                        $perPage,
-                        $modelName,
-                        $columnCustomizations,
-                        $allowedFilters
-                    );
-
-                    $metaOverrides = is_array($componentsMap) ? ($componentsMap['meta'] ?? null) : null;
-                    if (is_array($metaOverrides)) {
-                        $metaPayload = $this->applyOverridesToSection($metaPayload, $metaOverrides, $lang);
-                    }
-
-                    $componentSettings['meta'] = $metaPayload;
-                }
-            }
-
-            $topLevelHeaders = null;
-            if ($this->getIncludeTopLevelHeaders()) {
-                $topLevelHeaders = $this->buildTopLevelHeadersNoModel($columnsSchema, $effectiveTokens, $lang, $columnCustomizations);
-            }
-
-            $topLevelFilters = null;
-            if ($this->getIncludeTopLevelFilters()) {
-                $topLevelFilters = $this->buildFilters($columnsSchema, $modelName, $lang, $allowedFilters);
-            }
-
-            if ($this->getIncludeTopLevelPagination()) {
-                $response['pagination'] = [
-                    'current_page' => 1,
-                    'per_page' => $perPage,
-                ];
-            }
-            $response['component'] = $this->canonicalComponentName($component);
-            $response['componentSettings'] = $componentSettings;
-            if ($topLevelHeaders !== null) {
-                $response['headers'] = $topLevelHeaders;
-            }
-            if ($topLevelFilters !== null) {
-                $response['filters'] = $topLevelFilters;
-            }
-
-            $response = $this->collapseLocalizedKeys($response, $lang);
-
-            return response()->json($response);
-        }
-
-        // ----- Existing model-backed flow -----
-        $resolved = $this->resolveModel($modelName);
-
-        if (! $resolved) {
-            return response()->json(['error' => "Model '$modelName' not found or missing apiSchema()"], 422);
-        }
-
-        [$fqcn, $modelInstance, $schema] = $resolved;
-        $columnsSchema = $schema['columns'] ?? [];
-        $searchable = $schema['searchable'] ?? [];
-
-        try {
-            [$columnsSubsetNormalized, $relationsFromColumns] = $this->normalizeColumnsSubset($modelInstance, $columnsParam, $columnsSchema);
-        } catch (\InvalidArgumentException $e) {
-            return response()->json(['error' => $e->getMessage()], 422);
-        }
-
-        $with = $request->query('with');
-        $relations = $this->parseWithRelations($fqcn, $modelInstance, $with);
-        if (! empty($relationsFromColumns)) {
-            foreach ($relationsFromColumns as $rel) {
-                if (! in_array($rel, $relations, true)) {
-                    $relations[] = $rel;
-                }
-            }
+            [$fqcn, $modelInstance, $schema] = $resolved;
+            $columnsSchema = $schema['columns'] ?? [];
         }
 
         $lang = (string) ($request->query('lang') ?? 'dv');
-
         if (! $this->isLangAllowedForComponent($compBlock, $lang)) {
             return response()->json([
                 'message' => "Language '$lang' not supported by view config",
@@ -538,15 +687,32 @@ class ComponentConfigService
             ]);
         }
 
-        $q = $request->query('q');
         $perPage = (int) ($request->query('per_page') ?? ($compBlock['per_page'] ?? 25));
 
+        try {
+            [$columnsSubsetNormalized, $relationsFromColumns] = $this->normalizeColumnsSubset($modelInstance, $columnsParam, $columnsSchema);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => $e->getMessage()], 422);
+        }
+
+        // Model-backed: merge relation columns into with-relations
+        if ($modelInstance instanceof Model && $fqcn) {
+            $with = $request->query('with');
+            $relations = $this->parseWithRelations($fqcn, $modelInstance, $with);
+            foreach ($relationsFromColumns as $rel) {
+                if (! in_array($rel, $relations, true)) {
+                    $relations[] = $rel;
+                }
+            }
+        }
+
         $effectiveTokens = $this->filterTokensByLangSupport($modelInstance, $columnsSchema, $columnsSubsetNormalized ?? [], $lang);
-        $records = [];
 
         $component = (string) ($resolvedComp['componentKey'] ?? '');
         $columnCustomizations = $this->getColumnCustomizationsFromComponent($compBlock);
         $allowedFilters = $this->getAllowedFiltersFromComponent($compBlock);
+
+        // Build component settings
         $componentSettingsQuery = $request->query('componentSettings');
         if (is_string($componentSettingsQuery) && $componentSettingsQuery !== '') {
             $cfg = $this->loadComponentConfig($componentSettingsQuery);
@@ -599,7 +765,7 @@ class ComponentConfigService
             );
         }
 
-        // Include meta only when declared and not already built; apply per-view overrides
+        // Include meta only when declared and not already built
         $componentsMap = $compBlock['components'] ?? [];
         $shouldAppendMeta = is_array($componentsMap)
             && array_key_exists('meta', $componentsMap)
@@ -628,28 +794,27 @@ class ComponentConfigService
             }
         }
 
+        // Top-level headers
         $topLevelHeaders = null;
         if ($this->getIncludeTopLevelHeaders()) {
-            $columnCustomizations = $this->getColumnCustomizationsFromComponent($compBlock);
-            $topLevelHeaders = $this->buildTopLevelHeaders($modelInstance, $columnsSchema, $effectiveTokens, $lang, $columnCustomizations);
+            $topLevelHeaders = $this->buildTopLevelHeaders($columnsSchema, $effectiveTokens, $lang, $columnCustomizations, $modelInstance);
         }
 
+        // Top-level filters
         $topLevelFilters = null;
         if ($this->getIncludeTopLevelFilters()) {
-            $allowedFilters = $this->getAllowedFiltersFromComponent($compBlock);
-            $topLevelFilters = $this->buildTopLevelFilters(
-                $fqcn,
-                $modelInstance,
+            $topLevelFilters = $this->buildFilters(
                 $columnsSchema,
-                $columnsSubsetNormalized,
-                [],
-                $q,
-                $searchable,
+                $modelName,
                 $lang,
-                $allowedFilters
+                $allowedFilters,
+                $modelInstance,
+                $columnsSubsetNormalized
             );
         }
 
+        // Build response
+        $response = [];
         if ($this->getIncludeTopLevelPagination()) {
             $response['pagination'] = [
                 'current_page' => 1,
@@ -670,74 +835,19 @@ class ComponentConfigService
         return response()->json($response);
     }
 
-    /**
-     * Normalize tokens for noModel flow; collect relation names from dot tokens.
-     */
-    protected function normalizeColumnsSubsetNoModel(?string $columns, array $columnsSchema): array
-    {
-        $columnsSubsetNormalized = null;
-        $relationsFromColumns = [];
-        if ($columns) {
-            $tokens = array_filter(array_map('trim', explode(',', $columns)));
-            $columnsSubsetNormalized = [];
-            foreach ($tokens as $token) {
-                if (Str::contains($token, '.')) {
-                    [$first, $rest] = array_pad(explode('.', $token, 2), 2, null);
-                    if (! $rest) {
-                        throw new \InvalidArgumentException("Invalid columns segment '$token'");
-                    }
-                    $columnsSubsetNormalized[] = $first.'.'.$rest;
-                    $relationsFromColumns[] = $first;
-                } else {
-                    // Validate bare token exists in provided columnsSchema when possible
-                    if (! array_key_exists($token, $columnsSchema)) {
-                        // Allow passthrough for unknown tokens to support flexible views
-                        $columnsSubsetNormalized[] = $token;
-
-                        continue;
-                    }
-                    $columnsSubsetNormalized[] = $token;
-                }
-            }
-        }
-
-        return [$columnsSubsetNormalized, array_values(array_unique($relationsFromColumns))];
-    }
+    // ──────────────────────────────────────────────
+    //  Headers
+    // ──────────────────────────────────────────────
 
     /**
-     * Filter tokens by language support for noModel mode.
-     * Dot tokens are passed through; bare tokens checked against columnsSchema lang.
+     * Build top-level headers. Works for both model-backed and noModel flows.
      */
-    protected function filterTokensByLangSupportNoModel(array $columnsSchema, array $tokens, string $lang): array
-    {
-        $out = [];
-        foreach ($tokens as $token) {
-            if (Str::contains($token, '.')) {
-                // If a schema entry exists for the dot token, respect its language support
-                $def = $columnsSchema[$token] ?? null;
-                if ($def && $this->columnSupportsLang($def, $lang)) {
-                    $out[] = $token;
-                }
-
-                continue;
-            }
-            $def = $columnsSchema[$token] ?? null;
-            if ($def && $this->columnSupportsLang($def, $lang)) {
-                $out[] = $token;
-            }
-        }
-
-        return $out;
-    }
-
-    /**
-     * Build headers without relying on model relations/apiSchema.
-     */
-    protected function buildTopLevelHeadersNoModel(
+    public function buildTopLevelHeaders(
         array $columnsSchema,
         ?array $columnsSubsetNormalized,
         string $lang,
-        ?array $columnCustomizations = null
+        ?array $columnCustomizations = null,
+        ?Model $modelInstance = null
     ): array {
         $fields = [];
         if (is_array($columnsSubsetNormalized) && ! empty($columnsSubsetNormalized)) {
@@ -746,8 +856,7 @@ class ComponentConfigService
             $fields = array_keys($columnsSchema);
         }
 
-        // Respect column language support when building headers in noModel mode
-        $fields = $this->filterTokensByLangSupportNoModel($columnsSchema, $fields, $lang);
+        $fields = $this->filterTokensByLangSupport($modelInstance, $columnsSchema, $fields, $lang);
 
         $headers = [];
         foreach ($fields as $token) {
@@ -759,108 +868,48 @@ class ComponentConfigService
                     continue;
                 }
 
-                // If a schema entry exists for the relation token, use it
-                $relDef = $columnsSchema[$token] ?? null;
+                $resolved = $this->resolveRelationColumnDef($token, $columnsSchema, $modelInstance);
+                $relDef = $resolved['relDef'];
+
+                if (! $this->includeHiddenColumnsInHeaders && $relDef && (bool) ($relDef['hidden'] ?? false) === true) {
+                    continue;
+                }
+
+                // Build title
+                $title = $overrideTitle;
+                if ($title === null && $relDef) {
+                    $relLabel = $relDef['relationLabel'] ?? null;
+                    if (is_array($relLabel)) {
+                        $title = (string) ($relLabel[$lang] ?? $relLabel['en'] ?? $this->labelFor($relDef, $rest, $lang));
+                    } elseif (is_string($relLabel) && $relLabel !== '') {
+                        $title = $relLabel;
+                    } else {
+                        $title = $this->labelFor($relDef, $rest, $lang);
+                    }
+                }
+                if ($title === null) {
+                    $title = Str::title(str_replace('_', ' ', $rest));
+                }
+
                 if ($relDef) {
-                    if (! $this->includeHiddenColumnsInHeaders && (bool) ($relDef['hidden'] ?? false) === true) {
-                        continue;
-                    }
-
-                    $title = $overrideTitle;
-                    if ($title === null) {
-                        $relLabel = $relDef['relationLabel'] ?? null;
-                        if (is_array($relLabel)) {
-                            $title = (string) ($relLabel[$lang] ?? $relLabel['en'] ?? $this->labelFor($relDef, $rest, $lang));
-                        } elseif (is_string($relLabel) && $relLabel !== '') {
-                            $title = $relLabel;
-                        } else {
-                            $title = $this->labelFor($relDef, $rest, $lang);
-                        }
-                    }
-                    if ($title === null) {
-                        $title = Str::title(str_replace('_', ' ', $rest));
-                    }
-
+                    $header = $this->buildHeaderFromDef($relDef, $rest, $lang, $title);
+                    $header['value'] = $token;
+                } else {
                     $header = [
                         'title' => $title,
-                        'value' => $token,
-                        'sortable' => (bool) ($relDef['sortable'] ?? false),
-                        'hidden' => (bool) ($relDef['hidden'] ?? false),
-                    ];
-                    if (array_key_exists('type', $relDef)) {
-                        $header['type'] = (string) $relDef['type'];
-                    }
-                    if (array_key_exists('displayType', $relDef)) {
-                        $header['displayType'] = (string) $relDef['displayType'];
-                    }
-                    // New structure: attach config under the displayType key (e.g., 'chip')
-                    if (array_key_exists('displayType', $relDef)) {
-                        $dt = (string) $relDef['displayType'];
-                        $cfg = $relDef[$dt] ?? ($relDef['displayProps'] ?? null); // legacy fallback
-                        if (is_array($cfg)) {
-                            $header[$dt] = $this->normalizeDisplayConfig($dt, $cfg, $lang);
-                        }
-                    }
-                    if (array_key_exists('inlineEditable', $relDef)) {
-                        $header['inlineEditable'] = (bool) $relDef['inlineEditable'];
-                    }
-                    $override = $this->pickHeaderLangOverride($relDef, $lang);
-                    if ($override !== null) {
-                        $header['lang'] = $override;
-                    }
-                } else {
-                    // Fallback when no explicit schema exists for the relation token
-                    $header = [
-                        'title' => $overrideTitle ?? Str::title(str_replace('_', ' ', $rest)),
                         'value' => $token,
                         'sortable' => false,
                         'hidden' => false,
                     ];
                 }
 
-                // Apply column customizations overrides last
-                $custom = is_array($columnCustomizations) ? ($columnCustomizations[$token] ?? null) : null;
-                if (is_array($custom)) {
-                    if (array_key_exists('sortable', $custom)) {
-                        $header['sortable'] = (bool) $custom['sortable'];
-                    }
-                    if (array_key_exists('hidden', $custom)) {
-                        $header['hidden'] = (bool) $custom['hidden'];
-                    }
-                    if (array_key_exists('type', $custom)) {
-                        $header['type'] = (string) $custom['type'];
-                    }
-                    if (array_key_exists('displayType', $custom)) {
-                        $header['displayType'] = (string) $custom['displayType'];
-                    }
-                    if (array_key_exists('displayType', $custom)) {
-                        $cdt = (string) $custom['displayType'];
-                        $ccfg = $custom[$cdt] ?? ($custom['displayProps'] ?? null);
-                        if (is_array($ccfg)) {
-                            $header[$cdt] = $this->normalizeDisplayConfig($cdt, $ccfg, $lang);
-                        }
-                    }
-                    if (array_key_exists('inlineEditable', $custom)) {
-                        $header['inlineEditable'] = (bool) $custom['inlineEditable'];
-                    }
-                    if (array_key_exists('editable', $custom)) {
-                        $header['inlineEditable'] = (bool) $custom['editable'];
-                    }
-                    foreach ($custom as $k => $v) {
-                        if ($k === 'title' || $k === 'value' || $k === 'order') {
-                            continue;
-                        }
-                        if (! array_key_exists($k, $header)) {
-                            $header[$k] = $v;
-                        }
-                    }
-                }
-
+                $header = $this->applyCustomizationsToHeader($header, $columnCustomizations, $token, $lang);
                 $headers[] = $header;
 
                 continue;
             }
 
+            // Bare column
             $def = $columnsSchema[$token] ?? null;
             if (! $def) {
                 continue;
@@ -868,157 +917,112 @@ class ComponentConfigService
             if (! $this->includeHiddenColumnsInHeaders && (bool) ($def['hidden'] ?? false) === true) {
                 continue;
             }
-            $header = [
-                'title' => $overrideTitle ?? $this->labelFor($def, $token, $lang),
-                'value' => $this->keyFor($def, $token),
-                'sortable' => (bool) ($def['sortable'] ?? false),
-                'hidden' => (bool) ($def['hidden'] ?? false),
-            ];
-            if (array_key_exists('type', $def)) {
-                $header['type'] = (string) $def['type'];
-            }
-            if (array_key_exists('displayType', $def)) {
-                $header['displayType'] = (string) $def['displayType'];
-            }
-            if (array_key_exists('displayType', $def)) {
-                $dt = (string) $def['displayType'];
-                $cfg = $def[$dt] ?? ($def['displayProps'] ?? null); // legacy fallback
-                if (is_array($cfg)) {
-                    $header[$dt] = $this->normalizeDisplayConfig($dt, $cfg, $lang);
-                }
-            }
-            if (array_key_exists('inlineEditable', $def)) {
-                $header['inlineEditable'] = (bool) $def['inlineEditable'];
-            }
-            $override = $this->pickHeaderLangOverride($def, $lang);
-            if ($override !== null) {
-                $header['lang'] = $override;
-            }
-            $custom = is_array($columnCustomizations) ? ($columnCustomizations[$token] ?? null) : null;
-            if (is_array($custom)) {
-                if (array_key_exists('sortable', $custom)) {
-                    $header['sortable'] = (bool) $custom['sortable'];
-                }
-                if (array_key_exists('hidden', $custom)) {
-                    $header['hidden'] = (bool) $custom['hidden'];
-                }
-                if (array_key_exists('type', $custom)) {
-                    $header['type'] = (string) $custom['type'];
-                }
-                if (array_key_exists('displayType', $custom)) {
-                    $header['displayType'] = (string) $custom['displayType'];
-                }
-                if (array_key_exists('displayType', $custom)) {
-                    $cdt = (string) $custom['displayType'];
-                    $ccfg = $custom[$cdt] ?? ($custom['displayProps'] ?? null);
-                    if (is_array($ccfg)) {
-                        $header[$cdt] = $this->normalizeDisplayConfig($cdt, $ccfg, $lang);
-                    }
-                }
-                if (array_key_exists('inlineEditable', $custom)) {
-                    $header['inlineEditable'] = (bool) $custom['inlineEditable'];
-                }
-                if (array_key_exists('editable', $custom)) {
-                    $header['inlineEditable'] = (bool) $custom['editable'];
-                }
-                foreach ($custom as $k => $v) {
-                    if ($k === 'title' || $k === 'value' || $k === 'order') {
-                        continue;
-                    }
-                    if (! array_key_exists($k, $header)) {
-                        $header[$k] = $v;
-                    }
-                }
-            }
+
+            $header = $this->buildHeaderFromDef($def, $token, $lang, $overrideTitle);
+            $header = $this->applyCustomizationsToHeader($header, $columnCustomizations, $token, $lang);
             $headers[] = $header;
         }
 
         // Append custom columns from columnCustomizations that are not in the schema
         if (is_array($columnCustomizations)) {
-            $existingKeys = array_map(fn (array $h) => $h['value'] ?? '', $headers);
-            foreach ($columnCustomizations as $custKey => $custProps) {
-                if (in_array($custKey, $existingKeys, true)) {
-                    continue;
-                }
-                if (! is_array($custProps)) {
-                    continue;
-                }
-
-                $label = $custProps['label'] ?? null;
-                $title = null;
-                $lang_override = null;
-                if (is_array($label)) {
-                    $title = (string) ($label[$lang] ?? $label['en'] ?? reset($label) ?? '');
-                    $otherLangs = array_values(array_filter(
-                        array_keys($label),
-                        fn ($l) => strtolower((string) $l) !== strtolower($lang)
-                    ));
-                    if (! empty($otherLangs)) {
-                        $lang_override = strtolower($otherLangs[0]);
-                    }
-                } elseif (is_string($label) && $label !== '') {
-                    $title = $label;
-                }
-                if ($title === null) {
-                    $title = Str::title(str_replace('_', ' ', $custKey));
-                }
-
-                $header = [
-                    'title' => $title,
-                    'value' => $custKey,
-                ];
-                if ($lang_override !== null) {
-                    $header['lang'] = $lang_override;
-                }
-
-                foreach ($custProps as $k => $v) {
-                    if ($k === 'label' || $k === 'title' || $k === 'value' || $k === 'order') {
-                        continue;
-                    }
-                    if ($k === 'displayType' && is_string($v)) {
-                        $header['displayType'] = $v;
-                        $dtCfg = $custProps[$v] ?? ($custProps['displayProps'] ?? null);
-                        if (is_array($dtCfg)) {
-                            $header[$v] = $this->normalizeDisplayConfig($v, $dtCfg, $lang);
-                        }
-
-                        continue;
-                    }
-                    // Skip raw display-type config keys already handled above
-                    $dt = $custProps['displayType'] ?? null;
-                    if (is_string($dt) && $k === $dt) {
-                        continue;
-                    }
-                    if ($k === 'sortable') {
-                        $header['sortable'] = (bool) $v;
-                    } elseif ($k === 'hidden') {
-                        $header['hidden'] = (bool) $v;
-                    } elseif ($k === 'inlineEditable' || $k === 'editable') {
-                        $header['inlineEditable'] = (bool) $v;
-                    } else {
-                        $header[$k] = $v;
-                    }
-                }
-
-                $headers[] = $header;
-            }
+            $headers = $this->appendCustomHeaders($headers, $columnCustomizations, $lang);
         }
 
-        // Reorder headers based on 'order' specified in columnCustomizations
         $headers = $this->reorderHeadersByCustomOrder($headers, $columnCustomizations);
 
         return $headers;
     }
 
     /**
-     * Build data link URL without model relations (derive "with" from dot tokens only).
+     * Append custom header columns defined in columnCustomizations but not in the schema.
      */
-    protected function buildDataLinkNoModel(
+    protected function appendCustomHeaders(array $headers, array $columnCustomizations, string $lang): array
+    {
+        $existingKeys = array_map(fn (array $h) => $h['value'] ?? '', $headers);
+
+        foreach ($columnCustomizations as $custKey => $custProps) {
+            if (in_array($custKey, $existingKeys, true)) {
+                continue;
+            }
+            if (! is_array($custProps)) {
+                continue;
+            }
+
+            $label = $custProps['label'] ?? null;
+            $title = null;
+            $lang_override = null;
+            if (is_array($label)) {
+                $title = (string) ($label[$lang] ?? $label['en'] ?? reset($label) ?? '');
+                $otherLangs = array_values(array_filter(
+                    array_keys($label),
+                    fn ($l) => strtolower((string) $l) !== strtolower($lang)
+                ));
+                if (! empty($otherLangs)) {
+                    $lang_override = strtolower($otherLangs[0]);
+                }
+            } elseif (is_string($label) && $label !== '') {
+                $title = $label;
+            }
+            if ($title === null) {
+                $title = Str::title(str_replace('_', ' ', $custKey));
+            }
+
+            $header = [
+                'title' => $title,
+                'value' => $custKey,
+            ];
+            if ($lang_override !== null) {
+                $header['lang'] = $lang_override;
+            }
+
+            foreach ($custProps as $k => $v) {
+                if ($k === 'label' || $k === 'title' || $k === 'value' || $k === 'order') {
+                    continue;
+                }
+                if ($k === 'displayType' && is_string($v)) {
+                    $header['displayType'] = $v;
+                    $dtCfg = $custProps[$v] ?? ($custProps['displayProps'] ?? null);
+                    if (is_array($dtCfg)) {
+                        $header[$v] = $this->normalizeDisplayConfig($v, $dtCfg, $lang);
+                    }
+
+                    continue;
+                }
+                $dt = $custProps['displayType'] ?? null;
+                if (is_string($dt) && $k === $dt) {
+                    continue;
+                }
+                if ($k === 'sortable') {
+                    $header['sortable'] = (bool) $v;
+                } elseif ($k === 'hidden') {
+                    $header['hidden'] = (bool) $v;
+                } elseif ($k === 'inlineEditable' || $k === 'editable') {
+                    $header['inlineEditable'] = (bool) $v;
+                } else {
+                    $header[$k] = $v;
+                }
+            }
+
+            $headers[] = $header;
+        }
+
+        return $headers;
+    }
+
+    // ──────────────────────────────────────────────
+    //  Data links
+    // ──────────────────────────────────────────────
+
+    /**
+     * Build data link URL. Works for both model-backed and noModel flows.
+     */
+    protected function buildDataLink(
         array $columnsSchema,
         ?array $columnsSubsetNormalized,
         string $lang,
         string $modelName,
-        int $perPage
+        int $perPage,
+        ?Model $modelInstance = null
     ): string {
         $baseTokens = [];
         if (is_array($columnsSubsetNormalized) && ! empty($columnsSubsetNormalized)) {
@@ -1026,7 +1030,7 @@ class ComponentConfigService
         } else {
             $baseTokens = array_keys($columnsSchema);
         }
-        $tokens = $this->filterTokensByLangSupportNoModel($columnsSchema, $baseTokens, $lang);
+        $tokens = $this->filterTokensByLangSupport($modelInstance, $columnsSchema, $baseTokens, $lang);
 
         $relationFields = [];
         foreach ($tokens as $token) {
@@ -1051,7 +1055,9 @@ class ComponentConfigService
         }
 
         $prefix = config('uiapi.route_prefix', 'api');
-        $base = url("/{$prefix}/gapi/{$modelName}");
+        $base = $modelInstance instanceof Model
+            ? "gapi/{$modelName}"
+            : url("/{$prefix}/gapi/{$modelName}");
 
         $query = 'columns='.implode(',', $tokens);
         if (! empty($withSegments)) {
@@ -1064,18 +1070,18 @@ class ComponentConfigService
 
     /**
      * Build create link (relative) for POST create endpoint.
-     * Per requirements: plain string, relative path starting with gapi/ and no params.
      */
     protected function buildCreateLink(string $modelName): string
     {
         return 'gapi/'.$modelName;
     }
 
+    // ──────────────────────────────────────────────
+    //  Form fields
+    // ──────────────────────────────────────────────
+
     /**
      * Build form fields array from schema (works for both model and noModel flows).
-     * - Includes all non-hidden base fields from schema
-     * - Also includes relation dot-tokens present in columnsSubsetNormalized
-     * - Does not filter by language (explicitly includes irrespective of lang)
      */
     protected function buildFormFieldsFromSchema(
         array $columnsSchema,
@@ -1090,8 +1096,6 @@ class ComponentConfigService
             if (! is_array($def)) {
                 $def = [];
             }
-            // Model-backed: include only if formField === true. Missing -> excluded.
-            // noModel: include all columns regardless of formField/hidden.
             if ($modelInstance instanceof Model) {
                 if (! ((bool) ($def['formField'] ?? false) === true)) {
                     continue;
@@ -1103,16 +1107,7 @@ class ComponentConfigService
             if ($inputType === '') {
                 $inputType = $this->defaultInputTypeForType($def['type'] ?? null);
             }
-            $langsRaw = $def['lang'] ?? null;
-            $langValue = '';
-            if (is_array($langsRaw)) {
-                $normalized = array_values(array_unique(array_map(fn ($l) => (string) $l, $langsRaw)));
-                if (count($normalized) === 1) {
-                    $langValue = (string) $normalized[0];
-                } elseif (! empty($normalized)) {
-                    $langValue = in_array($lang, $normalized, true) ? (string) $lang : (string) $normalized[0];
-                }
-            }
+            $langValue = $this->resolveLangValue($def, $lang);
             $type = (string) ($def['type'] ?? 'string');
             $fieldOut = [
                 'key' => $key,
@@ -1122,59 +1117,11 @@ class ComponentConfigService
                 'inputType' => $inputType,
             ];
 
-            // For select inputType, include itemTitle/itemValue and items or url
             if (strtolower($inputType) === 'select') {
-                $cfg = $def['select'] ?? ($def['filterable'] ?? null); // legacy fallback
+                $cfg = $def['select'] ?? ($def['filterable'] ?? null);
                 if (is_array($cfg)) {
-                    $mode = strtolower((string) ($cfg['mode'] ?? 'self'));
-                    $rawItemTitle = $cfg['itemTitle'] ?? $key;
-                    $itemTitle = is_array($rawItemTitle)
-                        ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $key)
-                        : (string) $rawItemTitle;
-                    $itemValue = (string) ($cfg['itemValue'] ?? $key);
-                    $fieldOut['itemTitle'] = $itemTitle;
-                    $fieldOut['itemValue'] = $itemValue;
-
-                    if ($mode === 'self') {
-                        $items = $cfg['items'] ?? [];
-                        $outItems = [];
-                        if (is_array($items)) {
-                            foreach (array_values($items) as $it) {
-                                if (is_array($it)) {
-                                    $outItems[] = [
-                                        $itemTitle => (string) ($it[$itemTitle] ?? ''),
-                                        $itemValue => (string) ($it[$itemValue] ?? ''),
-                                    ];
-                                } else {
-                                    $outItems[] = [
-                                        $itemTitle => (string) $it,
-                                        $itemValue => (string) $it,
-                                    ];
-                                }
-                            }
-                        }
-                        $fieldOut['items'] = $outItems;
-                    } else {
-                        // relation mode: build URL for fetching options
-                        $relationship = (string) ($cfg['relationship'] ?? '');
-                        $related = null;
-                        if ($modelInstance instanceof Model && $relationship !== '') {
-                            $related = $this->resolveRelatedModel($modelInstance, $relationship);
-                        }
-                        $relatedName = $related ? class_basename($related) : null;
-                        if (! $relatedName) {
-                            // Try to infer from key
-                            $base = $key;
-                            if (\Illuminate\Support\Str::endsWith($base, '_id')) {
-                                $base = \Illuminate\Support\Str::beforeLast($base, '_id');
-                            }
-                            $relatedName = \Illuminate\Support\Str::studly($base);
-                        }
-                        $prefix = config('uiapi.route_prefix', 'api');
-                        $columnsParam = $itemValue.','.$itemTitle;
-                        $sortParam = $itemTitle;
-                        $fieldOut['url'] = url('/'.$prefix.'/gapi/'.$relatedName).'?columns='.$columnsParam.'&sort='.$sortParam.'&pagination=off&wrap=data';
-                    }
+                    $selectOpts = $this->buildSelectOptions($cfg, $key, $lang, $modelInstance);
+                    $fieldOut = array_merge($fieldOut, $selectOpts);
                 }
             }
 
@@ -1191,183 +1138,56 @@ class ComponentConfigService
                 if (! $rest) {
                     continue;
                 }
+
+                $leafDef = null;
                 if ($modelInstance instanceof Model) {
-                    // Model-backed: resolve nested related model and use leaf field schema for lang/type/label
                     $segments = explode('.', $token);
                     $leaf = array_pop($segments);
                     $chain = implode('.', $segments);
                     $related = $this->resolveNestedRelatedModel($modelInstance, $chain);
-                    $leafDef = null;
                     if ($related instanceof Model && method_exists($related, 'apiSchema')) {
-                        $schema = $related->apiSchema();
-                        $relCols = is_array($schema['columns'] ?? null) ? $schema['columns'] : [];
+                        $relSchema = $related->apiSchema();
+                        $relCols = is_array($relSchema['columns'] ?? null) ? $relSchema['columns'] : [];
                         $leafDef = $relCols[$leaf] ?? null;
                     }
-                    // Relations: display only if leaf schema has formField === true
                     if (! (is_array($leafDef) && ((bool) ($leafDef['formField'] ?? false) === true))) {
                         continue;
                     }
-                    $key = is_array($leafDef) ? $this->keyFor($leafDef, $leaf) : $token;
-                    $label = is_array($leafDef) ? $this->labelFor($leafDef, $leaf, $lang) : Str::title(str_replace('_', ' ', (string) $leaf));
-                    $inputType = is_array($leafDef) ? (string) ($leafDef['inputType'] ?? '') : '';
-                    if ($inputType === '') {
-                        $inputType = $this->defaultInputTypeForType(is_array($leafDef) ? ($leafDef['type'] ?? null) : null);
-                    }
-                    $langsRaw = is_array($leafDef) ? ($leafDef['lang'] ?? null) : null;
-                    $langValue = '';
-                    if (is_array($langsRaw)) {
-                        $normalized = array_values(array_unique(array_map(fn ($l) => (string) $l, $langsRaw)));
-                        if (count($normalized) === 1) {
-                            $langValue = (string) $normalized[0];
-                        } elseif (! empty($normalized)) {
-                            $langValue = in_array($lang, $normalized, true) ? (string) $lang : (string) $normalized[0];
-                        }
-                    }
-
-                    $type = is_array($leafDef) ? (string) ($leafDef['type'] ?? 'string') : 'string';
-                    $fieldOut = [
-                        'key' => $key,
-                        'label' => $label,
-                        'lang' => $langValue,
-                        'type' => $type,
-                        'inputType' => $inputType,
-                    ];
-                    if (strtolower($inputType) === 'select' && is_array($leafDef)) {
-                        $cfg = $leafDef['select'] ?? ($leafDef['filterable'] ?? null);
-                        if (is_array($cfg)) {
-                            $mode = strtolower((string) ($cfg['mode'] ?? 'self'));
-                            $rawItemTitle = $cfg['itemTitle'] ?? $key;
-                            $itemTitle = is_array($rawItemTitle)
-                                ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $key)
-                                : (string) $rawItemTitle;
-                            $itemValue = (string) ($cfg['itemValue'] ?? $key);
-                            $fieldOut['itemTitle'] = $itemTitle;
-                            $fieldOut['itemValue'] = $itemValue;
-                            if ($mode === 'self') {
-                                $items = $cfg['items'] ?? [];
-                                $outItems = [];
-                                if (is_array($items)) {
-                                    foreach (array_values($items) as $it) {
-                                        if (is_array($it)) {
-                                            $outItems[] = [
-                                                $itemTitle => (string) ($it[$itemTitle] ?? ''),
-                                                $itemValue => (string) ($it[$itemValue] ?? ''),
-                                            ];
-                                        } else {
-                                            $outItems[] = [
-                                                $itemTitle => (string) $it,
-                                                $itemValue => (string) $it,
-                                            ];
-                                        }
-                                    }
-                                }
-                                $fieldOut['items'] = $outItems;
-                            } else {
-                                $relationship = (string) ($cfg['relationship'] ?? '');
-                                $related = null;
-                                if ($modelInstance instanceof Model && $relationship !== '') {
-                                    $related = $this->resolveRelatedModel($modelInstance, $relationship);
-                                }
-                                $relatedName = $related ? class_basename($related) : null;
-                                if (! $relatedName) {
-                                    $base = $key;
-                                    if (\Illuminate\Support\Str::endsWith($base, '_id')) {
-                                        $base = \Illuminate\Support\Str::beforeLast($base, '_id');
-                                    }
-                                    $relatedName = \Illuminate\Support\Str::studly($base);
-                                }
-                                $prefix = config('uiapi.route_prefix', 'api');
-                                $columnsParam = $itemValue.','.$itemTitle;
-                                $sortParam = $itemTitle;
-                                $fieldOut['url'] = url('/'.$prefix.'/gapi/'.$relatedName).'?columns='.$columnsParam.'&sort='.$sortParam.'&pagination=off&wrap=data';
-                            }
-                        }
-                    }
-
-                    $fields[] = $fieldOut;
                 } else {
-                    // noModel: include all columns; use explicit dot-token schema if present; otherwise include with empty lang
-                    $def = $columnsSchema[$token] ?? [];
-                    $key = $this->keyFor(is_array($def) ? $def : [], $token);
-                    $label = is_array($def)
-                        ? $this->labelFor($def, $rest, $lang)
-                        : Str::title(str_replace('_', ' ', (string) $rest));
-                    $inputType = is_array($def) ? (string) ($def['inputType'] ?? '') : '';
-                    if ($inputType === '' && is_array($def)) {
-                        $inputType = $this->defaultInputTypeForType($def['type'] ?? null);
+                    $leafDef = $columnsSchema[$token] ?? null;
+                    if (! is_array($leafDef)) {
+                        $leafDef = [];
                     }
-                    $langsRaw = is_array($def) ? ($def['lang'] ?? null) : null;
-                    $langValue = '';
-                    if (is_array($langsRaw)) {
-                        $normalized = array_values(array_unique(array_map(fn ($l) => (string) $l, $langsRaw)));
-                        if (count($normalized) === 1) {
-                            $langValue = (string) $normalized[0];
-                        } elseif (! empty($normalized)) {
-                            $langValue = in_array($lang, $normalized, true) ? (string) $lang : (string) $normalized[0];
-                        }
-                    }
-
-                    $type = is_array($def) ? (string) ($def['type'] ?? 'string') : 'string';
-                    $fieldOut = [
-                        'key' => $key,
-                        'label' => $label,
-                        'lang' => $langValue,
-                        'type' => $type,
-                        'inputType' => $inputType,
-                    ];
-                    if (strtolower($inputType) === 'select' && is_array($def)) {
-                        $cfg = $def['select'] ?? ($def['filterable'] ?? null);
-                        if (is_array($cfg)) {
-                            $mode = strtolower((string) ($cfg['mode'] ?? 'self'));
-                            $rawItemTitle = $cfg['itemTitle'] ?? $key;
-                            $itemTitle = is_array($rawItemTitle)
-                                ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $key)
-                                : (string) $rawItemTitle;
-                            $itemValue = (string) ($cfg['itemValue'] ?? $key);
-                            $fieldOut['itemTitle'] = $itemTitle;
-                            $fieldOut['itemValue'] = $itemValue;
-                            if ($mode === 'self') {
-                                $items = $cfg['items'] ?? [];
-                                $outItems = [];
-                                if (is_array($items)) {
-                                    foreach (array_values($items) as $it) {
-                                        if (is_array($it)) {
-                                            $outItems[] = [
-                                                $itemTitle => (string) ($it[$itemTitle] ?? ''),
-                                                $itemValue => (string) ($it[$itemValue] ?? ''),
-                                            ];
-                                        } else {
-                                            $outItems[] = [
-                                                $itemTitle => (string) $it,
-                                                $itemValue => (string) $it,
-                                            ];
-                                        }
-                                    }
-                                }
-                                $fieldOut['items'] = $outItems;
-                            } else {
-                                // noModel relation: infer related model name from relationship or token
-                                $relationship = (string) ($cfg['relationship'] ?? '');
-                                $relatedName = $relationship !== '' ? \Illuminate\Support\Str::studly($relationship) : null;
-                                if (! $relatedName) {
-                                    $base = $key;
-                                    if (\Illuminate\Support\Str::contains($token, '.')) {
-                                        $base = \Illuminate\Support\Str::before($token, '.');
-                                    } elseif (\Illuminate\Support\Str::endsWith($base, '_id')) {
-                                        $base = \Illuminate\Support\Str::beforeLast($base, '_id');
-                                    }
-                                    $relatedName = \Illuminate\Support\Str::studly($base);
-                                }
-                                $prefix = config('uiapi.route_prefix', 'api');
-                                $columnsParam = $itemValue.','.$itemTitle;
-                                $sortParam = $itemTitle;
-                                $fieldOut['url'] = url('/'.$prefix.'/gapi/'.$relatedName).'?columns='.$columnsParam.'&sort='.$sortParam.'&pagination=off&wrap=data';
-                            }
-                        }
-                    }
-
-                    $fields[] = $fieldOut;
                 }
+
+                $key = is_array($leafDef) && ! empty($leafDef) ? $this->keyFor($leafDef, $rest) : $token;
+                $label = is_array($leafDef) && ! empty($leafDef)
+                    ? $this->labelFor($leafDef, $rest, $lang)
+                    : Str::title(str_replace('_', ' ', (string) $rest));
+                $inputType = is_array($leafDef) ? (string) ($leafDef['inputType'] ?? '') : '';
+                if ($inputType === '') {
+                    $inputType = $this->defaultInputTypeForType(is_array($leafDef) ? ($leafDef['type'] ?? null) : null);
+                }
+                $langValue = is_array($leafDef) ? $this->resolveLangValue($leafDef, $lang) : '';
+                $type = is_array($leafDef) ? (string) ($leafDef['type'] ?? 'string') : 'string';
+
+                $fieldOut = [
+                    'key' => $key,
+                    'label' => $label,
+                    'lang' => $langValue,
+                    'type' => $type,
+                    'inputType' => $inputType,
+                ];
+
+                if (strtolower($inputType) === 'select' && is_array($leafDef)) {
+                    $cfg = $leafDef['select'] ?? ($leafDef['filterable'] ?? null);
+                    if (is_array($cfg)) {
+                        $selectOpts = $this->buildSelectOptions($cfg, $key, $lang, $modelInstance, $token);
+                        $fieldOut = array_merge($fieldOut, $selectOpts);
+                    }
+                }
+
+                $fields[] = $fieldOut;
             }
         }
 
@@ -1392,16 +1212,21 @@ class ComponentConfigService
         return $current;
     }
 
+    // ──────────────────────────────────────────────
+    //  Section payload & component settings (unified)
+    // ──────────────────────────────────────────────
+
     /**
-     * Section payload builder for noModel mode.
+     * Build section payload. Works for both model-backed and noModel flows.
      */
-    protected function buildSectionPayloadNoModel(
+    public function buildSectionPayload(
         array $node,
         array $columnsSchema,
         ?array $columnsSubsetNormalized,
         string $lang,
         int $perPage,
         string $modelName,
+        ?Model $modelInstance = null,
         ?array $columnCustomizations = null,
         ?array $allowedFilters = null
     ): array {
@@ -1410,9 +1235,7 @@ class ComponentConfigService
             if ($key === 'crudLink') {
                 if ($val === 'on') {
                     $out['crudLink'] = $this->buildCreateLink($modelName);
-                } elseif ($val === 'off') {
-                    // omit
-                } else {
+                } elseif ($val !== 'off') {
                     $out['crudLink'] = $val;
                 }
 
@@ -1420,10 +1243,8 @@ class ComponentConfigService
             }
             if ($key === 'fields') {
                 if ($val === 'on') {
-                    $out['fields'] = $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang);
-                } elseif ($val === 'off') {
-                } else {
-                    // Pass-through custom fields definition
+                    $out['fields'] = $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang, $modelInstance);
+                } elseif ($val !== 'off') {
                     $out['fields'] = $val;
                 }
 
@@ -1432,9 +1253,7 @@ class ComponentConfigService
             if ($key === 'createLink') {
                 if ($val === 'on') {
                     $out['createLink'] = $this->buildCreateLink($modelName);
-                } elseif ($val === 'off') {
-                } else {
-                    // Pass-through custom value (string|object)
+                } elseif ($val !== 'off') {
                     $out['createLink'] = $val;
                 }
 
@@ -1442,9 +1261,8 @@ class ComponentConfigService
             }
             if ($key === 'headers') {
                 if ($val === 'on') {
-                    $out['headers'] = $this->buildTopLevelHeadersNoModel($columnsSchema, $columnsSubsetNormalized, $lang, $columnCustomizations);
-                } elseif ($val === 'off') {
-                } else {
+                    $out['headers'] = $this->buildTopLevelHeaders($columnsSchema, $columnsSubsetNormalized, $lang, $columnCustomizations, $modelInstance);
+                } elseif ($val !== 'off') {
                     $out['headers'] = $val;
                 }
 
@@ -1452,9 +1270,8 @@ class ComponentConfigService
             }
             if ($key === 'filters') {
                 if ($val === 'on') {
-                    $out['filters'] = $this->buildFilters($columnsSchema, $modelName, $lang, $allowedFilters);
-                } elseif ($val === 'off') {
-                } else {
+                    $out['filters'] = $this->buildFilters($columnsSchema, $modelName, $lang, $allowedFilters, $modelInstance);
+                } elseif ($val !== 'off') {
                     $out['filters'] = $val;
                 }
 
@@ -1466,8 +1283,7 @@ class ComponentConfigService
                         'current_page' => 1,
                         'per_page' => $perPage,
                     ];
-                } elseif ($val === 'off') {
-                } else {
+                } elseif ($val !== 'off') {
                     $out['pagination'] = $val;
                 }
 
@@ -1475,15 +1291,15 @@ class ComponentConfigService
             }
             if ($key === 'datalink') {
                 if ($val === 'on') {
-                    $out['datalink'] = $this->buildDataLinkNoModel(
+                    $out['datalink'] = $this->buildDataLink(
                         $columnsSchema,
                         $columnsSubsetNormalized,
                         $lang,
                         $modelName,
-                        $perPage
+                        $perPage,
+                        $modelInstance
                     );
-                } elseif ($val === 'off') {
-                } else {
+                } elseif ($val !== 'off') {
                     $out['datalink'] = $val;
                 }
 
@@ -1503,7 +1319,7 @@ class ComponentConfigService
                 continue;
             }
             if (is_array($val)) {
-                $out[$key] = $this->buildSectionPayloadNoModel($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $columnCustomizations, $allowedFilters);
+                $out[$key] = $this->buildSectionPayload($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $modelInstance, $columnCustomizations, $allowedFilters);
             } else {
                 $out[$key] = $val;
             }
@@ -1513,15 +1329,16 @@ class ComponentConfigService
     }
 
     /**
-     * Build component settings for a single component key (noModel mode).
+     * Build component settings for a single component key. Unified for model + noModel.
      */
-    protected function buildComponentSettingsNoModel(
+    public function buildComponentSettings(
         string $componentSettingsKey,
         array $columnsSchema,
         ?array $columnsSubsetNormalized,
         string $lang,
         int $perPage,
         string $modelName,
+        ?Model $modelInstance = null,
         ?array $columnCustomizations = null,
         ?array $allowedFilters = null
     ): array {
@@ -1534,13 +1351,14 @@ class ComponentConfigService
 
         if (isset($configFile[$componentSettingsKey]) && is_array($configFile[$componentSettingsKey])) {
             $sectionCfg = $configFile[$componentSettingsKey];
-            $componentSettings[$componentSettingsKey] = $this->buildSectionPayloadNoModel(
+            $componentSettings[$componentSettingsKey] = $this->buildSectionPayload(
                 $sectionCfg,
                 $columnsSchema,
                 $columnsSubsetNormalized,
                 $lang,
                 $perPage,
                 $modelName,
+                $modelInstance,
                 $columnCustomizations,
                 $allowedFilters
             );
@@ -1552,13 +1370,14 @@ class ComponentConfigService
             }
 
             if (is_array($sectionVal)) {
-                $componentSettings[$sectionName] = $this->buildSectionPayloadNoModel(
+                $componentSettings[$sectionName] = $this->buildSectionPayload(
                     $sectionVal,
                     $columnsSchema,
                     $columnsSubsetNormalized,
                     $lang,
                     $perPage,
                     $modelName,
+                    $modelInstance,
                     $columnCustomizations,
                     $allowedFilters
                 );
@@ -1569,15 +1388,16 @@ class ComponentConfigService
     }
 
     /**
-     * Build component settings for multiple component keys declared in view config (noModel mode).
+     * Build component settings for multiple component keys. Unified for model + noModel.
      */
-    protected function buildComponentSettingsForComponentsNoModel(
+    public function buildComponentSettingsForComponents(
         array $componentKeys,
         array $columnsSchema,
         ?array $columnsSubsetNormalized,
         string $lang,
         int $perPage,
         string $modelName,
+        ?Model $modelInstance = null,
         ?array $columnCustomizations = null,
         ?array $allowedFilters = null,
         ?array $componentsOverrides = null
@@ -1589,8 +1409,6 @@ class ComponentConfigService
                 continue;
             }
 
-            // Apply component overrides scoped to this component key.
-            // Note: $componentsOverrides is the view config's `components` block.
             $customizationsForComponent = $this->getColumnCustomizationsForComponent(
                 ['components' => $componentsOverrides ?? []],
                 $key
@@ -1608,13 +1426,14 @@ class ComponentConfigService
 
             if (isset($configFile[$key]) && is_array($configFile[$key])) {
                 $sectionCfg = $configFile[$key];
-                $payload = $this->buildSectionPayloadNoModel(
+                $payload = $this->buildSectionPayload(
                     $sectionCfg,
                     $columnsSchema,
                     $columnsSubsetForComponent,
                     $lang,
                     $perPage,
                     $modelName,
+                    $modelInstance,
                     $customizationsForComponent,
                     $allowedFilters
                 );
@@ -1632,6 +1451,138 @@ class ComponentConfigService
 
         return $componentSettings;
     }
+
+    // ──────────────────────────────────────────────
+    //  Filters (unified)
+    // ──────────────────────────────────────────────
+
+    /**
+     * Build filters array. Unified for model-backed and noModel flows.
+     */
+    public function buildFilters(
+        array $columnsSchema,
+        string $modelName,
+        string $lang,
+        ?array $allowedFilters = null,
+        ?Model $modelInstance = null,
+        ?array $columnsSubsetNormalized = null
+    ): array {
+        $this->logDebug('Entering buildFilters', ['method' => __METHOD__, 'model' => $modelName]);
+
+        $fields = is_array($allowedFilters)
+            ? $allowedFilters
+            : array_keys($columnsSchema);
+
+        $filters = [];
+        foreach ($fields as $field) {
+            $def = $columnsSchema[$field] ?? null;
+            if (! is_array($def) || ! $this->columnSupportsLang($def, $lang)) {
+                continue;
+            }
+
+            if (is_array($columnsSubsetNormalized) && ! in_array($field, $columnsSubsetNormalized, true)) {
+                continue;
+            }
+
+            $label = $this->labelFor($def, $field, $lang);
+            $key = $this->keyFor($def, $field);
+
+            $inputType = (string) ($def['inputType'] ?? $this->defaultInputTypeForType($def['type'] ?? null));
+            $cfg = is_string($inputType) && $inputType !== '' ? ($def[$inputType] ?? null) : null;
+
+            $legacy = $def['filterable'] ?? null;
+
+            $typeToken = match (strtolower($inputType)) {
+                'select' => 'Select',
+                'text', 'textfield' => 'Text',
+                'number', 'numberfield' => 'Number',
+                'checkbox' => 'Checkbox',
+                'date', 'datepicker' => 'Date',
+                default => $this->defaultFilterTypeForDef($def),
+            };
+
+            $overrideLabel = is_array($cfg) ? ($cfg['label'] ?? null) : (is_array($legacy) ? ($legacy['label'] ?? null) : null);
+            if (is_array($overrideLabel)) {
+                $label = (string) ($overrideLabel[$lang] ?? $overrideLabel['en'] ?? reset($overrideLabel) ?? $label);
+            } elseif (is_string($overrideLabel) && $overrideLabel !== '') {
+                $label = $overrideLabel;
+            }
+            $key = (string) ((is_array($cfg) ? ($cfg['value'] ?? null) : null) ?? (is_array($legacy) ? ($legacy['value'] ?? null) : null) ?? $key);
+
+            $filter = [
+                'type' => $typeToken,
+                'key' => $key,
+                'label' => $label,
+            ];
+
+            if (strtolower($typeToken) === 'select') {
+                $source = is_array($cfg) ? $cfg : (is_array($legacy) ? $legacy : []);
+                $mode = strtolower((string) ($source['mode'] ?? 'self'));
+
+                $rawItemTitle = $source['itemTitle'] ?? $key;
+                $itemTitle = is_array($rawItemTitle)
+                    ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $key)
+                    : (string) $rawItemTitle;
+                $itemValue = (string) ($source['itemValue'] ?? $key);
+
+                $filter['itemTitle'] = $itemTitle;
+                $filter['itemValue'] = $itemValue;
+
+                if ($mode === 'self') {
+                    $items = $source['items'] ?? [];
+                    $pruned = [];
+                    if (is_array($items)) {
+                        foreach (array_values($items) as $it) {
+                            if (is_array($it)) {
+                                $pruned[] = [
+                                    $itemTitle => (string) ($it[$itemTitle] ?? ''),
+                                    $itemValue => (string) ($it[$itemValue] ?? ''),
+                                ];
+                            } else {
+                                $pruned[] = [
+                                    $itemTitle => (string) $it,
+                                    $itemValue => (string) $it,
+                                ];
+                            }
+                        }
+                    }
+                    $filter['items'] = $pruned;
+                } else {
+                    $relationship = (string) ($source['relationship'] ?? '');
+                    if ($modelInstance instanceof Model && $relationship !== '') {
+                        $related = $this->resolveRelatedModel($modelInstance, $relationship);
+                        if ($related) {
+                            $prefix = config('uiapi.route_prefix', 'api');
+                            $base = url('/'.$prefix.'/'.class_basename($related));
+                            $queryStr = "columns={$itemValue},{$itemTitle}&sort={$itemTitle}&pagination=off&wrap=data";
+                            $filter['url'] = $base.'?'.$queryStr;
+                        }
+                    } else {
+                        $relatedModelName = $relationship !== '' ? Str::studly($relationship) : null;
+                        if (! $relatedModelName) {
+                            $base = $key;
+                            if (Str::endsWith($base, '_id')) {
+                                $base = Str::beforeLast($base, '_id');
+                            }
+                            $relatedModelName = Str::studly($base);
+                        }
+                        $columnsParamStr = $itemValue.','.$itemTitle;
+                        $sortParam = $itemTitle;
+                        $prefix = config('uiapi.route_prefix', 'api');
+                        $filter['url'] = url("/{$prefix}/gapi/{$relatedModelName}").'?columns='.$columnsParamStr.'&sort='.$sortParam.'&pagination=off&wrap=data';
+                    }
+                }
+            }
+
+            $filters[] = $filter;
+        }
+
+        return $filters;
+    }
+
+    // ──────────────────────────────────────────────
+    //  View config & component config loading
+    // ──────────────────────────────────────────────
 
     public function loadViewConfig(string $modelName): array
     {
@@ -1716,13 +1667,12 @@ class ComponentConfigService
         return $cfg;
     }
 
+    // ──────────────────────────────────────────────
+    //  External JS functions
+    // ──────────────────────────────────────────────
+
     /**
      * Resolve external JS function references in a functions map.
-     *
-     * Each entry can be:
-     * - A plain string (inline JS body) → passed through as-is.
-     * - An object with "file" and "function" keys → the function body is
-     *   extracted from the referenced .js file in the js_scripts_path directory.
      *
      * @param  array<string, mixed>  $functions
      * @return array<string, string>
@@ -1733,7 +1683,6 @@ class ComponentConfigService
 
         foreach ($functions as $name => $definition) {
             if (is_string($definition)) {
-                // Inline JS body — pass through
                 $resolved[$name] = $definition;
 
                 continue;
@@ -1749,7 +1698,6 @@ class ComponentConfigService
                 continue;
             }
 
-            // Unrecognized format — pass through as-is
             $resolved[$name] = $definition;
         }
 
@@ -1758,9 +1706,6 @@ class ComponentConfigService
 
     /**
      * Extract the body of a named JS function from a file in the js_scripts_path directory.
-     *
-     * Looks for `function <name>(...)  { ... }` and returns only the inner body
-     * (without the function signature or outer braces).
      *
      * @return string The function body, or an error string if not found.
      */
@@ -1779,9 +1724,7 @@ class ComponentConfigService
 
         $content = File::get($path);
 
-        // Match: function <name> ( <params> ) { <body> }
-        // Uses brace-counting to handle nested braces correctly.
-        $pattern = '/\bfunction\s+' . preg_quote($functionName, '/') . '\s*\([^)]*\)\s*\{/';
+        $pattern = '/\bfunction\s+'.preg_quote($functionName, '/').'\s*\([^)]*\)\s*\{/';
         if (! preg_match($pattern, $content, $matches, PREG_OFFSET_CAPTURE)) {
             $error = "[UiApi] Function '{$functionName}' not found in {$fileName}";
             $this->logDebug($error, ['method' => __METHOD__, 'file' => $fileName, 'function' => $functionName]);
@@ -1790,7 +1733,6 @@ class ComponentConfigService
             return "/* ERROR: {$error} */";
         }
 
-        // Find the opening brace position
         $openBracePos = strpos($content, '{', $matches[0][1]);
         if ($openBracePos === false) {
             $error = "[UiApi] Could not parse function '{$functionName}' in {$fileName}";
@@ -1799,7 +1741,6 @@ class ComponentConfigService
             return "/* ERROR: {$error} */";
         }
 
-        // Count braces to find the matching closing brace
         $depth = 0;
         $len = strlen($content);
         $bodyStart = $openBracePos + 1;
@@ -1826,7 +1767,6 @@ class ComponentConfigService
 
         $body = substr($content, $bodyStart, $bodyEnd - $bodyStart);
 
-        // Trim leading/trailing whitespace and normalize indentation
         $lines = explode("\n", $body);
         $trimmed = array_map('trim', $lines);
         $trimmed = array_filter($trimmed, fn ($line) => $line !== '');
@@ -1834,16 +1774,12 @@ class ComponentConfigService
         return implode(' ', $trimmed);
     }
 
+    // ──────────────────────────────────────────────
+    //  Label, key, and display helpers
+    // ──────────────────────────────────────────────
+
     protected function labelFor(array $columnDef, string $field, string $lang): string
     {
-        // $this->logDebug('Entering labelFor', ['method' => __METHOD__, 'field' => $field]);
-        /**
-         * Label selection rules:
-         * - Single-language support in `lang` → use that label.
-         * - Multi-language support → use label matching request `lang` (defaults to `dv`).
-         * - Plain string label → return it.
-         * - Fallbacks → try 'en', then 'dv', then first non-empty, else title-cased field.
-         */
         $supportedLangs = $columnDef['lang'] ?? [];
         $supportedLangs = is_array($supportedLangs)
             ? array_values(array_unique(array_map(fn ($l) => strtolower((string) $l), $supportedLangs)))
@@ -1889,17 +1825,11 @@ class ComponentConfigService
 
     protected function keyFor(array $columnDef, string $field): string
     {
-        // $this->logDebug('Entering keyFor', ['method' => __METHOD__, 'field' => $field]);
-
         return (string) ($columnDef['key'] ?? $field);
     }
 
     /**
      * Reorder headers based on the 'order' key in columnCustomizations.
-     *
-     * Headers with an explicit 'order' (0-based) are repositioned to that index.
-     * Headers without 'order' retain their natural position. Out-of-range values
-     * are clamped to the end. Conflicts are resolved by insertion order.
      *
      * @param  array<int, array<string, mixed>>  $headers
      * @param  array<string, mixed>|null  $columnCustomizations
@@ -1911,7 +1841,6 @@ class ComponentConfigService
             return $headers;
         }
 
-        // Build a map of header value => desired order
         $orderMap = [];
         foreach ($columnCustomizations as $key => $props) {
             if (is_array($props) && array_key_exists('order', $props)) {
@@ -1923,7 +1852,6 @@ class ComponentConfigService
             return $headers;
         }
 
-        // Separate headers into those with an order and those without
         $ordered = [];
         $unordered = [];
         foreach ($headers as $header) {
@@ -1935,13 +1863,9 @@ class ComponentConfigService
             }
         }
 
-        // Start with the unordered headers in their natural positions
         $result = $unordered;
-
-        // Stable sort the ordered items by their requested position
         usort($ordered, fn ($a, $b) => $a['order'] <=> $b['order']);
 
-        // Insert each ordered header at its requested position (clamped to bounds)
         foreach ($ordered as $item) {
             $pos = max(0, min($item['order'], count($result)));
             array_splice($result, $pos, 0, [$item['header']]);
@@ -1954,15 +1878,11 @@ class ComponentConfigService
     {
         $this->logDebug('Entering defaultFilterTypeForDef', ['method' => __METHOD__]);
         $colType = strtolower((string) ($columnDef['type'] ?? 'string'));
-        switch ($colType) {
-            case 'date':
-                return 'Date';
-            case 'datetime':
-            case 'timestamp':
-                return 'Date';
-            default:
-                return 'Text';
-        }
+
+        return match ($colType) {
+            'date', 'datetime', 'timestamp' => 'Date',
+            default => 'Text',
+        };
     }
 
     /**
@@ -2020,7 +1940,6 @@ class ComponentConfigService
 
     /**
      * Normalize display-type specific configs for headers.
-     * For 'chip', resolve per-option label using the request lang (fallback to 'dv', then 'en').
      */
     protected function normalizeDisplayConfig(string $displayType, array $config, string $lang): array
     {
@@ -2030,6 +1949,7 @@ class ComponentConfigService
             foreach ($config as $key => $opt) {
                 if (! is_array($opt)) {
                     $out[$key] = $opt;
+
                     continue;
                 }
                 $optOut = $opt;
@@ -2041,112 +1961,11 @@ class ComponentConfigService
                 }
                 $out[$key] = $optOut;
             }
+
             return $out;
         }
 
         return $config;
-    }
-
-    public function buildFilters(array $columnsSchema, string $modelName, string $lang, ?array $allowedFilters = null): array
-    {
-        $this->logDebug('Entering buildFilters', ['method' => __METHOD__, 'model' => $modelName]);
-        $filters = [];
-        foreach ($columnsSchema as $field => $def) {
-            if (is_array($allowedFilters) && ! in_array($field, $allowedFilters, true)) {
-                continue;
-            }
-            if (! is_array($def) || ! $this->columnSupportsLang($def, $lang)) {
-                continue;
-            }
-            // New structure: use inputType and config under a key with the same name
-            $inputType = (string) ($def['inputType'] ?? $this->defaultInputTypeForType($def['type'] ?? null));
-            $cfg = is_string($inputType) && $inputType !== '' ? ($def[$inputType] ?? null) : null;
-
-            // Backward-compatibility: fall back to legacy 'filterable'
-            $legacy = $def['filterable'] ?? null;
-
-            $label = $this->labelFor($def, $field, $lang);
-            $key = $this->keyFor($def, $field);
-
-            // Determine filter type token for UI
-            $typeToken = match (strtolower($inputType)) {
-                'select' => 'Select',
-                'text', 'textfield' => 'Text',
-                'number', 'numberfield' => 'Number',
-                'checkbox' => 'Checkbox',
-                'date', 'datepicker' => 'Date',
-                default => $this->defaultFilterTypeForDef($def),
-            };
-
-            // Allow overrides from cfg or legacy
-            $overrideLabel = is_array($cfg) ? ($cfg['label'] ?? null) : (is_array($legacy) ? ($legacy['label'] ?? null) : null);
-            if (is_array($overrideLabel)) {
-                $label = (string) ($overrideLabel[$lang] ?? $overrideLabel['en'] ?? reset($overrideLabel) ?? $label);
-            } elseif (is_string($overrideLabel) && $overrideLabel !== '') {
-                $label = $overrideLabel;
-            }
-            $key = (string) ((is_array($cfg) ? ($cfg['value'] ?? null) : null) ?? (is_array($legacy) ? ($legacy['value'] ?? null) : null) ?? $key);
-
-            $filter = [
-                'type' => $typeToken,
-                'key' => $key,
-                'label' => $label,
-            ];
-
-            // For select-type filters, build items or relation URL
-            if (strtolower($typeToken) === 'select') {
-                $source = is_array($cfg) ? $cfg : (is_array($legacy) ? $legacy : []);
-                $mode = strtolower((string) ($source['mode'] ?? 'self'));
-
-                $rawItemTitle = $source['itemTitle'] ?? $this->keyFor($def, $field);
-                $itemTitle = is_array($rawItemTitle)
-                    ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $this->keyFor($def, $field))
-                    : (string) $rawItemTitle;
-                $itemValue = (string) ($source['itemValue'] ?? $this->keyFor($def, $field));
-
-                $filter['itemTitle'] = $itemTitle;
-                $filter['itemValue'] = $itemValue;
-
-                if ($mode === 'self') {
-                    $items = $source['items'] ?? [];
-                    $pruned = [];
-                    if (is_array($items)) {
-                        foreach (array_values($items) as $it) {
-                            if (is_array($it)) {
-                                $pruned[] = [
-                                    $itemTitle => (string) ($it[$itemTitle] ?? ''),
-                                    $itemValue => (string) ($it[$itemValue] ?? ''),
-                                ];
-                            } else {
-                                $pruned[] = [
-                                    $itemTitle => (string) $it,
-                                    $itemValue => (string) $it,
-                                ];
-                            }
-                        }
-                    }
-                    $filter['items'] = $pruned;
-                } else {
-                    $relationship = (string) ($source['relationship'] ?? '');
-                    $relatedModelName = $relationship !== '' ? Str::studly($relationship) : null;
-                    if (! $relatedModelName) {
-                        $base = $key;
-                        if (Str::endsWith($base, '_id')) {
-                            $base = Str::beforeLast($base, '_id');
-                        }
-                        $relatedModelName = Str::studly($base);
-                    }
-                    $columnsParam = $itemValue.','.$itemTitle;
-                    $sortParam = $itemTitle;
-                    $prefix = config('uiapi.route_prefix', 'api');
-                    $filter['url'] = url("/{$prefix}/gapi/{$relatedModelName}").'?columns='.$columnsParam.'&sort='.$sortParam.'&pagination=off&wrap=data';
-                }
-            }
-
-            $filters[] = $filter;
-        }
-
-        return $filters;
     }
 
     protected function resolveCustomizedTitle(?array $columnCustomizations, string $token, string $lang): ?string
@@ -2172,259 +1991,21 @@ class ComponentConfigService
         return null;
     }
 
-    public function buildSectionPayload(
-        array $node,
-        array $columnsSchema,
-        ?array $columnsSubsetNormalized,
-        string $lang,
-        int $perPage,
-        string $modelName,
-        Model $modelInstance,
-        ?array $columnCustomizations = null,
-        ?array $allowedFilters = null
-    ): array {
-        $out = [];
-        foreach ($node as $key => $val) {
-            if ($key === 'crudLink') {
-                if ($val === 'on') {
-                    $out['crudLink'] = $this->buildCreateLink($modelName);
-                } elseif ($val === 'off') {
-                    // omit
-                } else {
-                    $out['crudLink'] = $val;
-                }
-
-                continue;
-            }
-            if ($key === 'fields') {
-                if ($val === 'on') {
-                    $out['fields'] = $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang, $modelInstance);
-                } elseif ($val === 'off') {
-                } else {
-                    // Pass-through custom fields definition
-                    $out['fields'] = $val;
-                }
-
-                continue;
-            }
-            if ($key === 'createLink') {
-                if ($val === 'on') {
-                    $out['createLink'] = $this->buildCreateLink($modelName);
-                } elseif ($val === 'off') {
-                } else {
-                    // Pass-through custom value (string|object)
-                    $out['createLink'] = $val;
-                }
-
-                continue;
-            }
-            if ($key === 'headers') {
-                if ($val === 'on') {
-                    $out['headers'] = $this->buildTopLevelHeaders($modelInstance, $columnsSchema, $columnsSubsetNormalized, $lang, $columnCustomizations);
-                } elseif ($val === 'off') {
-                } else {
-                    $out['headers'] = $val;
-                }
-
-                continue;
-            }
-            if ($key === 'filters') {
-                if ($val === 'on') {
-                    $out['filters'] = $this->buildFilters($columnsSchema, $modelName, $lang, $allowedFilters);
-                } elseif ($val === 'off') {
-                } else {
-                    $out['filters'] = $val;
-                }
-
-                continue;
-            }
-            if ($key === 'pagination') {
-                if ($val === 'on') {
-                    $out['pagination'] = [
-                        'current_page' => 1,
-                        'per_page' => $perPage,
-                    ];
-                } elseif ($val === 'off') {
-                } else {
-                    $out['pagination'] = $val;
-                }
-
-                continue;
-            }
-            if ($key === 'datalink') {
-                if ($val === 'on') {
-                    $out['datalink'] = $this->buildDataLink(
-                        $modelInstance,
-                        $columnsSchema,
-                        $columnsSubsetNormalized,
-                        $lang,
-                        $modelName,
-                        $perPage
-                    );
-                } elseif ($val === 'off') {
-                } else {
-                    $out['datalink'] = $val;
-                }
-
-                continue;
-            }
-            if ($key === 'functions') {
-                if (is_array($val)) {
-                    $out['functions'] = $this->resolveExternalFunctions($val);
-                } else {
-                    $out['functions'] = $val;
-                }
-
-                continue;
-            }
-            // Skip keys consumed internally by CCS
-            if (in_array($key, $this->internalKeys, true)) {
-                continue;
-            }
-            if (is_array($val)) {
-                $out[$key] = $this->buildSectionPayload($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $modelInstance, $columnCustomizations, $allowedFilters);
-            } else {
-                $out[$key] = $val;
-            }
-        }
-
-        return $out;
-    }
-
-    public function buildComponentSettings(
-        string $componentSettingsKey,
-        array $columnsSchema,
-        ?array $columnsSubsetNormalized,
-        string $lang,
-        int $perPage,
-        string $modelName,
-        Model $modelInstance,
-        ?array $columnCustomizations = null,
-        ?array $allowedFilters = null
-    ): array {
-        $configFile = $this->loadComponentConfig($componentSettingsKey);
-        if (empty($configFile)) {
-            return [];
-        }
-
-        $componentSettings = [];
-
-        if (isset($configFile[$componentSettingsKey]) && is_array($configFile[$componentSettingsKey])) {
-            $sectionCfg = $configFile[$componentSettingsKey];
-            $componentSettings[$componentSettingsKey] = $this->buildSectionPayload(
-                $sectionCfg,
-                $columnsSchema,
-                $columnsSubsetNormalized,
-                $lang,
-                $perPage,
-                $modelName,
-                $modelInstance,
-                $columnCustomizations,
-                $allowedFilters
-            );
-        }
-
-        foreach ($configFile as $sectionName => $sectionVal) {
-            if ($sectionName === $componentSettingsKey) {
-                continue;
-            }
-
-            if (is_array($sectionVal)) {
-                $componentSettings[$sectionName] = $this->buildSectionPayload(
-                    $sectionVal,
-                    $columnsSchema,
-                    $columnsSubsetNormalized,
-                    $lang,
-                    $perPage,
-                    $modelName,
-                    $modelInstance,
-                    $columnCustomizations,
-                    $allowedFilters
-                );
-            }
-        }
-
-        return $componentSettings;
-    }
-
-    public function buildComponentSettingsForComponents(
-        array $componentKeys,
-        array $columnsSchema,
-        ?array $columnsSubsetNormalized,
-        string $lang,
-        int $perPage,
-        string $modelName,
-        Model $modelInstance,
-        ?array $columnCustomizations = null,
-        ?array $allowedFilters = null,
-        ?array $componentsOverrides = null
-    ): array {
-        $componentSettings = [];
-
-        foreach ($componentKeys as $key) {
-            if (! is_string($key) || $key === '') {
-                continue;
-            }
-
-            // Apply component overrides scoped to this component key.
-            // Note: $componentsOverrides is the view config's `components` block.
-            $customizationsForComponent = $this->getColumnCustomizationsForComponent(
-                ['components' => $componentsOverrides ?? []],
-                $key
-            ) ?? $columnCustomizations;
-            $columnsForComponent = $this->getColumnsForComponent(
-                ['components' => $componentsOverrides ?? []],
-                $key
-            );
-            $columnsSubsetForComponent = $columnsForComponent ?? $columnsSubsetNormalized;
-
-            $configFile = $this->loadComponentConfig($key);
-            if (empty($configFile)) {
-                continue;
-            }
-
-            if (isset($configFile[$key]) && is_array($configFile[$key])) {
-                $sectionCfg = $configFile[$key];
-                $payload = $this->buildSectionPayload(
-                    $sectionCfg,
-                    $columnsSchema,
-                    $columnsSubsetForComponent,
-                    $lang,
-                    $perPage,
-                    $modelName,
-                    $modelInstance,
-                    $customizationsForComponent,
-                    $allowedFilters
-                );
-
-                if (is_array($componentsOverrides) && array_key_exists($key, $componentsOverrides)) {
-                    $override = $componentsOverrides[$key];
-                    if (is_array($override)) {
-                        $payload = $this->applyOverridesToSection($payload, $override, $lang);
-                    }
-                }
-
-                $componentSettings[$key] = $payload;
-            }
-        }
-
-        return $componentSettings;
-    }
+    // ──────────────────────────────────────────────
+    //  Overrides
+    // ──────────────────────────────────────────────
 
     protected function applyOverridesToSection(array $sectionPayload, array $overrides, string $lang): array
     {
         foreach ($overrides as $overrideKey => $overrideVal) {
-            // Skip keys consumed internally by CCS
             if (in_array($overrideKey, $this->internalKeys, true)) {
                 continue;
             }
-            // Resolve external JS function references before applying
             if ($overrideKey === 'functions' && is_array($overrideVal)) {
                 $sectionPayload['functions'] = $this->resolveExternalFunctions($overrideVal);
 
                 continue;
             }
-            // 1) Scalars: set value, or "off" string to remove
             if (is_scalar($overrideVal)) {
                 $targetKey = $overrideKey;
                 if (! array_key_exists($targetKey, $sectionPayload)) {
@@ -2444,7 +2025,6 @@ class ComponentConfigService
 
                     continue;
                 }
-                // If target does not exist after mapping and custom keys are disabled, skip
                 if (! array_key_exists($targetKey, $sectionPayload)) {
                     if ($this->getAllowCustomComponentKeys()) {
                         $sectionPayload[$overrideKey] = $overrideVal;
@@ -2457,12 +2037,10 @@ class ComponentConfigService
                 continue;
             }
 
-            // 2) Non-array values are ignored
             if (! is_array($overrideVal)) {
                 continue;
             }
 
-            // Resolve the target key (supports plural/singular mapping)
             $targetKey = $overrideKey;
             if (! array_key_exists($targetKey, $sectionPayload)) {
                 $plural = Str::plural($overrideKey);
@@ -2473,7 +2051,6 @@ class ComponentConfigService
                         break;
                     }
                 }
-                // No existing target: set directly only if custom keys allowed
                 if (! array_key_exists($targetKey, $sectionPayload)) {
                     if ($this->getAllowCustomComponentKeys()) {
                         $sectionPayload[$overrideKey] = $overrideVal;
@@ -2485,13 +2062,11 @@ class ComponentConfigService
 
             $original = $sectionPayload[$targetKey];
             if (! is_array($original)) {
-                // Replace non-array target with override array
                 $sectionPayload[$targetKey] = $overrideVal;
 
                 continue;
             }
 
-            // Determine override form: array of strings (filter) or array of objects (merge)
             $allStrings = count($overrideVal) > 0;
             $hasAssoc = false;
             foreach ($overrideVal as $v) {
@@ -2506,7 +2081,6 @@ class ComponentConfigService
             }
 
             if ($allStrings) {
-                // Filter list to only wanted items by key/name/type/label
                 $wanted = array_values(array_unique(array_map('strval', $overrideVal)));
                 $wantedLower = array_map('strtolower', $wanted);
                 $filtered = [];
@@ -2529,7 +2103,6 @@ class ComponentConfigService
             }
 
             if ($hasAssoc) {
-                // For fields overrides in noModel, restrict to provided keys and merge properties
                 if ($targetKey === 'fields') {
                     $merged = [];
                     foreach ($overrideVal as $ov) {
@@ -2553,7 +2126,6 @@ class ComponentConfigService
                     continue;
                 }
 
-                // Default behavior: merge override items with existing list using 'key' match; append new items
                 $merged = $original;
                 foreach ($overrideVal as $ov) {
                     if (! is_array($ov)) {
@@ -2580,12 +2152,15 @@ class ComponentConfigService
                 continue;
             }
 
-            // Default: replace target with override array
             $sectionPayload[$targetKey] = $overrideVal;
         }
 
         return $sectionPayload;
     }
+
+    // ──────────────────────────────────────────────
+    //  Relation helpers
+    // ──────────────────────────────────────────────
 
     protected function resolveRelatedModel(Model $model, string $relation): ?Model
     {
@@ -2622,124 +2197,6 @@ class ComponentConfigService
         return 'id';
     }
 
-    public function buildTopLevelFilters(
-        string $fqcn,
-        Model $modelInstance,
-        array $columnsSchema,
-        ?array $columnsSubsetNormalized,
-        array $appliedFilters,
-        ?string $q,
-        array $searchable,
-        string $lang,
-        ?array $allowedFilters = null
-    ): array {
-        $filters = [];
-
-        $fields = is_array($allowedFilters)
-            ? $allowedFilters
-            : array_keys($columnsSchema);
-
-        foreach ($fields as $field) {
-            $def = $columnsSchema[$field] ?? null;
-            $f = is_array($def) ? ($def['filterable'] ?? null) : null; // legacy fallback
-
-            if (! is_array($def) || ! $this->columnSupportsLang($def, $lang)) {
-                continue;
-            }
-
-            if (is_array($columnsSubsetNormalized) && ! in_array($field, $columnsSubsetNormalized, true)) {
-                continue;
-            }
-
-            $label = $def
-                ? $this->labelFor($def, $field, $lang)
-                : Str::title(str_replace('_', ' ', $field));
-
-            $key = $def
-                ? $this->keyFor($def, $field)
-                : $field;
-
-            // New structure: prefer 'inputType' config under matching key
-            $inputType = (string) ($def['inputType'] ?? $this->defaultInputTypeForType($def['type'] ?? null));
-            $cfg = is_string($inputType) && $inputType !== '' ? ($def[$inputType] ?? null) : null;
-
-            $typeToken = match (strtolower($inputType)) {
-                'select' => 'Select',
-                'text', 'textfield' => 'Text',
-                'number', 'numberfield' => 'Number',
-                'checkbox' => 'Checkbox',
-                'date', 'datepicker' => 'Date',
-                default => ($def ? $this->defaultFilterTypeForDef($def) : 'Search'),
-            };
-
-            // Overrides
-            $overrideLabel = is_array($cfg) ? ($cfg['label'] ?? null) : (is_array($f) ? ($f['label'] ?? null) : null);
-            if (is_array($overrideLabel)) {
-                $label = (string) ($overrideLabel[$lang] ?? $overrideLabel['en'] ?? $label);
-            } elseif (is_string($overrideLabel) && $overrideLabel !== '') {
-                $label = $overrideLabel;
-            }
-            $key = (string) ((is_array($cfg) ? ($cfg['value'] ?? null) : null) ?? (is_array($f) ? ($f['value'] ?? null) : null) ?? $key);
-
-            $out = [
-                'type' => $typeToken,
-                'key' => $key,
-                'label' => $label,
-            ];
-
-            // Select specifics
-            if (strtolower($typeToken) === 'select') {
-                $source = is_array($cfg) ? $cfg : (is_array($f) ? $f : []);
-                $mode = strtolower((string) ($source['mode'] ?? 'self'));
-
-                $rawItemTitle = $source['itemTitle'] ?? $key;
-                $itemTitle = is_array($rawItemTitle)
-                    ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle))
-                    : (string) $rawItemTitle;
-
-                $itemValue = (string) ($source['itemValue'] ?? $key);
-
-                $out['itemTitle'] = $itemTitle;
-                $out['itemValue'] = $itemValue;
-
-                if ($mode === 'self') {
-                    $items = $source['items'] ?? [];
-                    $out['items'] = [];
-                    if (is_array($items)) {
-                        foreach (array_values($items) as $it) {
-                            if (is_array($it)) {
-                                $out['items'][] = [
-                                    $itemTitle => (string) ($it[$itemTitle] ?? ''),
-                                    $itemValue => (string) ($it[$itemValue] ?? ''),
-                                ];
-                            } else {
-                                $out['items'][] = [
-                                    $itemTitle => (string) $it,
-                                    $itemValue => (string) $it,
-                                ];
-                            }
-                        }
-                    }
-                } else {
-                    $relationship = (string) ($source['relationship'] ?? '');
-                    $related = $relationship
-                        ? $this->resolveRelatedModel($modelInstance, $relationship)
-                        : null;
-                    if ($related) {
-                        $prefix = config('uiapi.route_prefix', 'api');
-                        $base = url('/'.$prefix.'/'.class_basename($related));
-                        $query = "columns={$itemValue},{$itemTitle}&sort={$itemTitle}&pagination=off&wrap=data";
-                        $out['url'] = $base.'?'.$query;
-                    }
-                }
-            }
-
-            $filters[] = $out;
-        }
-
-        return $filters;
-    }
-
     public function columnSupportsLang(array $def, string $lang): bool
     {
         $langs = $def['lang'] ?? null;
@@ -2749,437 +2206,5 @@ class ComponentConfigService
         $normalized = array_values(array_unique(array_map(fn ($l) => strtolower((string) $l), $langs)));
 
         return in_array(strtolower($lang), $normalized, true);
-    }
-
-    public function filterTokensByLangSupport(Model $modelInstance, array $columnsSchema, array $tokens, string $lang): array
-    {
-        $out = [];
-        foreach ($tokens as $token) {
-            if (Str::contains($token, '.')) {
-                [$first, $rest] = array_pad(explode('.', $token, 2), 2, null);
-                if (! $rest) {
-                    continue;
-                }
-                $relationName = null;
-                if (method_exists($modelInstance, $first)) {
-                    try {
-                        $relTest = $modelInstance->{$first}();
-                    } catch (\Throwable $e) {
-                        $relTest = null;
-                    }
-                    if ($relTest instanceof \Illuminate\Database\Eloquent\Relations\Relation) {
-                        $relationName = $first;
-                    }
-                }
-                if (! $relationName) {
-                    $camel = Str::camel($first);
-                    if (method_exists($modelInstance, $camel)) {
-                        try {
-                            $relTest = $modelInstance->{$camel}();
-                        } catch (\Throwable $e) {
-                            $relTest = null;
-                        }
-                        if ($relTest instanceof \Illuminate\Database\Eloquent\Relations\Relation) {
-                            $relationName = $camel;
-                        }
-                    }
-                }
-                if (! $relationName && Str::endsWith($first, '_id')) {
-                    $guess = Str::camel(substr($first, 0, -3));
-                    if (method_exists($modelInstance, $guess)) {
-                        try {
-                            $relTest = $modelInstance->{$guess}();
-                        } catch (\Throwable $e) {
-                            $relTest = null;
-                        }
-                        if ($relTest instanceof \Illuminate\Database\Eloquent\Relations\Relation) {
-                            $relationName = $guess;
-                        }
-                    }
-                }
-
-                if ($relationName) {
-                    $related = $modelInstance->{$relationName}()->getRelated();
-                    $relSchema = method_exists($related, 'apiSchema') ? $related->apiSchema() : [];
-                    $relColumns = $relSchema['columns'] ?? [];
-                    $relDef = $relColumns[$rest] ?? null;
-                    if ($relDef && $this->columnSupportsLang($relDef, $lang)) {
-                        $out[] = $token;
-                    }
-
-                    continue;
-                }
-
-                continue;
-            }
-
-            $def = $columnsSchema[$token] ?? null;
-            if ($def && $this->columnSupportsLang($def, $lang)) {
-                $out[] = $token;
-            }
-        }
-
-        return $out;
-    }
-
-    public function buildTopLevelHeaders(
-        Model $modelInstance,
-        array $columnsSchema,
-        ?array $columnsSubsetNormalized,
-        string $lang,
-        ?array $columnCustomizations = null
-    ): array {
-        $fields = [];
-        if (is_array($columnsSubsetNormalized) && ! empty($columnsSubsetNormalized)) {
-            $fields = array_values(array_unique(array_filter(array_map(fn ($t) => is_string($t) ? $t : null, $columnsSubsetNormalized))));
-        } else {
-            $fields = array_keys($columnsSchema);
-        }
-
-        $fields = $this->filterTokensByLangSupport($modelInstance, $columnsSchema, $fields, $lang);
-
-        $headers = [];
-        foreach ($fields as $token) {
-            $overrideTitle = $this->resolveCustomizedTitle($columnCustomizations, $token, $lang);
-
-            if (Str::contains($token, '.')) {
-                [$first, $rest] = array_pad(explode('.', $token, 2), 2, null);
-                if (! $rest) {
-                    continue;
-                }
-
-                $relationName = null;
-                if (method_exists($modelInstance, $first)) {
-                    try {
-                        $relTest = $modelInstance->{$first}();
-                    } catch (\Throwable $e) {
-                        $relTest = null;
-                    }
-                    if ($relTest instanceof \Illuminate\Database\Eloquent\Relations\Relation) {
-                        $relationName = $first;
-                    }
-                }
-                if (! $relationName) {
-                    $camel = Str::camel($first);
-                    if (method_exists($modelInstance, $camel)) {
-                        try {
-                            $relTest = $modelInstance->{$camel}();
-                        } catch (\Throwable $e) {
-                            $relTest = null;
-                        }
-                        if ($relTest instanceof \Illuminate\Database\Eloquent\Relations\Relation) {
-                            $relationName = $camel;
-                        }
-                    }
-                }
-                if (! $relationName && Str::endsWith($first, '_id')) {
-                    $guess = Str::camel(substr($first, 0, -3));
-                    if (method_exists($modelInstance, $guess)) {
-                        try {
-                            $relTest = $modelInstance->{$guess}();
-                        } catch (\Throwable $e) {
-                            $relTest = null;
-                        }
-                        if ($relTest instanceof \Illuminate\Database\Eloquent\Relations\Relation) {
-                            $relationName = $guess;
-                        }
-                    }
-                }
-
-                $relDef = null;
-                if ($relationName) {
-                    $related = $modelInstance->{$relationName}()->getRelated();
-                    $relSchema = method_exists($related, 'apiSchema') ? $related->apiSchema() : [];
-                    $relColumns = $relSchema['columns'] ?? [];
-                    $relDef = $relColumns[$rest] ?? null;
-                }
-
-                if (! $this->includeHiddenColumnsInHeaders && $relDef && (bool) ($relDef['hidden'] ?? false) === true) {
-                    continue;
-                }
-
-                $title = $overrideTitle;
-                if ($title === null) {
-                    if ($relDef) {
-                        $relLabel = $relDef['relationLabel'] ?? null;
-                        if (is_array($relLabel)) {
-                            $title = (string) ($relLabel[$lang] ?? $relLabel['en'] ?? $this->labelFor($relDef, $rest, $lang));
-                        } elseif (is_string($relLabel) && $relLabel !== '') {
-                            $title = $relLabel;
-                        } else {
-                            $title = $this->labelFor($relDef, $rest, $lang);
-                        }
-                    }
-                }
-                if ($title === null) {
-                    $title = Str::title(str_replace('_', ' ', $rest));
-                }
-
-                $header = [
-                    'title' => $title,
-                    'value' => $token,
-                    'sortable' => (bool) ($relDef['sortable'] ?? false),
-                    'hidden' => (bool) ($relDef['hidden'] ?? false),
-                ];
-                if ($relDef && array_key_exists('type', $relDef)) {
-                    $header['type'] = (string) $relDef['type'];
-                }
-                if ($relDef && array_key_exists('displayType', $relDef)) {
-                    $header['displayType'] = (string) $relDef['displayType'];
-                }
-                // New structure: attach config under the displayType key (e.g., 'chip')
-                if ($relDef && array_key_exists('displayType', $relDef)) {
-                    $dt = (string) $relDef['displayType'];
-                    $cfg = $relDef[$dt] ?? ($relDef['displayProps'] ?? null); // legacy fallback
-                    if (is_array($cfg)) {
-                        $header[$dt] = $this->normalizeDisplayConfig($dt, $cfg, $lang);
-                    }
-                }
-                if ($relDef && array_key_exists('inlineEditable', $relDef)) {
-                    $header['inlineEditable'] = (bool) $relDef['inlineEditable'];
-                }
-                if ($relDef) {
-                    $override = $this->pickHeaderLangOverride($relDef, $lang);
-                    if ($override !== null) {
-                        $header['lang'] = $override;
-                    }
-                }
-                $custom = is_array($columnCustomizations) ? ($columnCustomizations[$token] ?? null) : null;
-                if (is_array($custom)) {
-                    if (array_key_exists('sortable', $custom)) {
-                        $header['sortable'] = (bool) $custom['sortable'];
-                    }
-                    if (array_key_exists('hidden', $custom)) {
-                        $header['hidden'] = (bool) $custom['hidden'];
-                    }
-                    if (array_key_exists('type', $custom)) {
-                        $header['type'] = (string) $custom['type'];
-                    }
-                    if (array_key_exists('displayType', $custom)) {
-                        $header['displayType'] = (string) $custom['displayType'];
-                    }
-                    if (array_key_exists('displayProps', $custom) && is_array($custom['displayProps'])) {
-                        $header['displayProps'] = $custom['displayProps'];
-                    }
-                    if (array_key_exists('inlineEditable', $custom)) {
-                        $header['inlineEditable'] = (bool) $custom['inlineEditable'];
-                    }
-                    if (array_key_exists('editable', $custom)) {
-                        $header['inlineEditable'] = (bool) $custom['editable'];
-                    }
-                    foreach ($custom as $k => $v) {
-                        if ($k === 'title' || $k === 'value' || $k === 'order') {
-                            continue;
-                        }
-                        if (! array_key_exists($k, $header)) {
-                            $header[$k] = $v;
-                        }
-                    }
-                }
-                $headers[] = $header;
-
-                continue;
-            }
-
-            $def = $columnsSchema[$token] ?? null;
-            if (! $def) {
-                continue;
-            }
-            if (! $this->includeHiddenColumnsInHeaders && (bool) ($def['hidden'] ?? false) === true) {
-                continue;
-            }
-            $header = [
-                'title' => $overrideTitle ?? $this->labelFor($def, $token, $lang),
-                'value' => $this->keyFor($def, $token),
-                'sortable' => (bool) ($def['sortable'] ?? false),
-                'hidden' => (bool) ($def['hidden'] ?? false),
-            ];
-            if (array_key_exists('type', $def)) {
-                $header['type'] = (string) $def['type'];
-            }
-            if (array_key_exists('displayType', $def)) {
-                $header['displayType'] = (string) $def['displayType'];
-            }
-            // New structure: attach config under the displayType key (e.g., 'chip')
-            if (array_key_exists('displayType', $def)) {
-                $dt = (string) $def['displayType'];
-                $cfg = $def[$dt] ?? ($def['displayProps'] ?? null); // legacy fallback
-                if (is_array($cfg)) {
-                    $header[$dt] = $this->normalizeDisplayConfig($dt, $cfg, $lang);
-                }
-            }
-            if (array_key_exists('inlineEditable', $def)) {
-                $header['inlineEditable'] = (bool) $def['inlineEditable'];
-            }
-            $override = $this->pickHeaderLangOverride($def, $lang);
-            if ($override !== null) {
-                $header['lang'] = $override;
-            }
-            $custom = is_array($columnCustomizations) ? ($columnCustomizations[$token] ?? null) : null;
-            if (is_array($custom)) {
-                if (array_key_exists('sortable', $custom)) {
-                    $header['sortable'] = (bool) $custom['sortable'];
-                }
-                if (array_key_exists('hidden', $custom)) {
-                    $header['hidden'] = (bool) $custom['hidden'];
-                }
-                if (array_key_exists('type', $custom)) {
-                    $header['type'] = (string) $custom['type'];
-                }
-                if (array_key_exists('displayType', $custom)) {
-                    $header['displayType'] = (string) $custom['displayType'];
-                }
-                // Custom overrides may still include legacy 'displayProps'
-                if (array_key_exists('displayType', $custom)) {
-                    $cdt = (string) $custom['displayType'];
-                    $ccfg = $custom[$cdt] ?? ($custom['displayProps'] ?? null);
-                    if (is_array($ccfg)) {
-                        $header[$cdt] = $this->normalizeDisplayConfig($cdt, $ccfg, $lang);
-                    }
-                }
-                if (array_key_exists('inlineEditable', $custom)) {
-                    $header['inlineEditable'] = (bool) $custom['inlineEditable'];
-                }
-                if (array_key_exists('editable', $custom)) {
-                    $header['inlineEditable'] = (bool) $custom['editable'];
-                }
-                foreach ($custom as $k => $v) {
-                    if ($k === 'title' || $k === 'value' || $k === 'order') {
-                        continue;
-                    }
-                    if (! array_key_exists($k, $header)) {
-                        $header[$k] = $v;
-                    }
-                }
-            }
-            $headers[] = $header;
-        }
-
-        // Append custom columns from columnCustomizations that are not in the schema
-        if (is_array($columnCustomizations)) {
-            $existingKeys = array_map(fn (array $h) => $h['value'] ?? '', $headers);
-            foreach ($columnCustomizations as $custKey => $custProps) {
-                if (in_array($custKey, $existingKeys, true)) {
-                    continue;
-                }
-                if (! is_array($custProps)) {
-                    continue;
-                }
-
-                $label = $custProps['label'] ?? null;
-                $title = null;
-                $lang_override = null;
-                if (is_array($label)) {
-                    $title = (string) ($label[$lang] ?? $label['en'] ?? reset($label) ?? '');
-                    $otherLangs = array_values(array_filter(
-                        array_keys($label),
-                        fn ($l) => strtolower((string) $l) !== strtolower($lang)
-                    ));
-                    if (! empty($otherLangs)) {
-                        $lang_override = strtolower($otherLangs[0]);
-                    }
-                } elseif (is_string($label) && $label !== '') {
-                    $title = $label;
-                }
-                if ($title === null) {
-                    $title = Str::title(str_replace('_', ' ', $custKey));
-                }
-
-                $header = [
-                    'title' => $title,
-                    'value' => $custKey,
-                ];
-                if ($lang_override !== null) {
-                    $header['lang'] = $lang_override;
-                }
-
-                foreach ($custProps as $k => $v) {
-                    if ($k === 'label' || $k === 'title' || $k === 'value' || $k === 'order') {
-                        continue;
-                    }
-                    if ($k === 'displayType' && is_string($v)) {
-                        $header['displayType'] = $v;
-                        $dtCfg = $custProps[$v] ?? ($custProps['displayProps'] ?? null);
-                        if (is_array($dtCfg)) {
-                            $header[$v] = $this->normalizeDisplayConfig($v, $dtCfg, $lang);
-                        }
-
-                        continue;
-                    }
-                    // Skip raw display-type config keys already handled above
-                    $dt = $custProps['displayType'] ?? null;
-                    if (is_string($dt) && $k === $dt) {
-                        continue;
-                    }
-                    if ($k === 'sortable') {
-                        $header['sortable'] = (bool) $v;
-                    } elseif ($k === 'hidden') {
-                        $header['hidden'] = (bool) $v;
-                    } elseif ($k === 'inlineEditable' || $k === 'editable') {
-                        $header['inlineEditable'] = (bool) $v;
-                    } else {
-                        $header[$k] = $v;
-                    }
-                }
-
-                $headers[] = $header;
-            }
-        }
-
-        // Reorder headers based on 'order' specified in columnCustomizations
-        $headers = $this->reorderHeadersByCustomOrder($headers, $columnCustomizations);
-
-        return $headers;
-    }
-
-    protected function buildDataLink(
-        Model $modelInstance,
-        array $columnsSchema,
-        ?array $columnsSubsetNormalized,
-        string $lang,
-        string $modelName,
-        int $perPage
-    ): string {
-        $baseTokens = [];
-        if (is_array($columnsSubsetNormalized) && ! empty($columnsSubsetNormalized)) {
-            $baseTokens = array_values(array_unique(array_filter(array_map(fn ($t) => is_string($t) ? $t : null, $columnsSubsetNormalized))));
-        } else {
-            $baseTokens = array_keys($columnsSchema);
-        }
-        $tokens = $this->filterTokensByLangSupport($modelInstance, $columnsSchema, $baseTokens, $lang);
-
-        $relationFields = [];
-        foreach ($tokens as $token) {
-            if (! Str::contains($token, '.')) {
-                continue;
-            }
-            [$rel, $field] = array_pad(explode('.', $token, 2), 2, null);
-            if (! $field) {
-                continue;
-            }
-            if (! isset($relationFields[$rel])) {
-                $relationFields[$rel] = [];
-            }
-            if (! in_array($field, $relationFields[$rel], true)) {
-                $relationFields[$rel][] = $field;
-            }
-        }
-
-        $withSegments = [];
-        foreach ($relationFields as $rel => $fields) {
-            $withSegments[] = $rel.':'.implode(',', $fields);
-        }
-
-        $prefix = config('uiapi.route_prefix', 'api');
-        $base = url("/{$prefix}/gapi/{$modelName}");
-        $base = "gapi/{$modelName}";
-
-        $query = 'columns='.implode(',', $tokens);
-        if (! empty($withSegments)) {
-            $query .= '&with='.implode(',', $withSegments);
-        }
-        $query .= '&per_page='.$perPage;
-
-        return $base.'?'.$query;
     }
 }
