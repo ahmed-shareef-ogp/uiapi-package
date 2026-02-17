@@ -22,6 +22,8 @@ class ComponentConfigService
 
     protected bool $allowCustomComponentKeys = false;
 
+    protected int $debugLevel = 1;
+
     /**
      * Keys consumed internally by CCS and stripped from the final payload.
      *
@@ -58,6 +60,9 @@ class ComponentConfigService
         $this->allowCustomComponentKeys = is_array($cfg) && array_key_exists('allow_custom_component_keys', $cfg)
             ? (bool) $cfg['allow_custom_component_keys']
             : false;
+        $this->debugLevel = is_array($cfg) && array_key_exists('debug_level', $cfg)
+            ? (int) $cfg['debug_level']
+            : 1;
         $this->logDebug('ComponentConfigService initialized', ['method' => __METHOD__]);
     }
 
@@ -679,6 +684,23 @@ class ComponentConfigService
             $columnsSchema = $schema['columns'] ?? [];
         }
 
+        // Run view config validation at debug_level 2+
+        $validationWarnings = null;
+        if ($this->debugLevel >= 2) {
+            $fullViewCfg = $this->loadViewConfig($modelName);
+            $validator = new ViewConfigValidator;
+            $validationResults = $validator->validate($fullViewCfg, $modelName);
+            if ($validator->hasErrors()) {
+                return response()->json([
+                    'error' => 'View config validation failed',
+                    'validation' => $validationResults,
+                ], 422);
+            }
+            if ($validator->hasWarnings()) {
+                $validationWarnings = $validationResults['warnings'];
+            }
+        }
+
         $lang = (string) ($request->query('lang') ?? 'dv');
         if (! $this->isLangAllowedForComponent($compBlock, $lang)) {
             return response()->json([
@@ -831,6 +853,10 @@ class ComponentConfigService
         }
 
         $response = $this->collapseLocalizedKeys($response, $lang);
+
+        if ($validationWarnings !== null) {
+            $response['_validation_warnings'] = $validationWarnings;
+        }
 
         return response()->json($response);
     }
@@ -1593,9 +1619,178 @@ class ComponentConfigService
             return [];
         }
         $json = File::get($path);
-        $cfg = json_decode($json, true) ?: [];
+        $cfg = json_decode($json, true);
 
-        return $cfg;
+        if ($cfg === null && json_last_error() !== JSON_ERROR_NONE) {
+            throw new \InvalidArgumentException(
+                $this->buildJsonErrorMessage($modelName, $path, $json)
+            );
+        }
+
+        return $cfg ?: [];
+    }
+
+    /**
+     * Build a descriptive JSON parse error message based on the configured debug level.
+     *
+     * Level 0: Generic error only.
+     * Level 1: Error type and file path.
+     * Level 2: Line number, column, and surrounding context snippet.
+     */
+    protected function buildJsonErrorMessage(string $modelName, string $path, string $json): string
+    {
+        $errorMsg = json_last_error_msg();
+
+        if ($this->debugLevel <= 0) {
+            return "JSON syntax error in view config for '{$modelName}'.";
+        }
+
+        if ($this->debugLevel === 1) {
+            return "JSON syntax error in view config for '{$modelName}': {$errorMsg}. File: {$path}";
+        }
+
+        // Level 2+: find the exact line and column of the error
+        $errorInfo = $this->locateJsonError($json);
+
+        $message = "JSON syntax error in view config for '{$modelName}': {$errorMsg}.";
+        $message .= " File: {$path}";
+
+        if ($errorInfo) {
+            $message .= " | Line {$errorInfo['line']}, column {$errorInfo['column']}";
+
+            // if ($errorInfo['context'] !== '') {
+            //     $message .= " | Near: {$errorInfo['context']}";
+            // }
+        }
+
+        return $message;
+    }
+
+    /**
+     * Locate the line and column of a JSON parse error by progressively parsing.
+     *
+     * @return array{line: int, column: int, context: string}|null
+     */
+    protected function locateJsonError(string $json): ?array
+    {
+        // Strategy: incrementally parse by adding one line at a time.
+        // The last line that introduces a new error is likely the problem.
+        $lines = explode("\n", $json);
+        $totalLines = count($lines);
+        $errorLine = $totalLines;
+        $errorColumn = 0;
+
+        // Try a binary-ish approach: parse first N lines to find where error starts
+        $accumulated = '';
+        for ($i = 0; $i < $totalLines; $i++) {
+            $accumulated .= ($i > 0 ? "\n" : '').$lines[$i];
+
+            // Close any open structures to make partial JSON parseable
+            $testJson = $this->closeJsonStructures($accumulated);
+            json_decode($testJson, true);
+
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                $errorLine = $i + 1;
+
+                // Estimate column: find the problematic character in this line
+                $errorColumn = $this->estimateErrorColumn($lines[$i]);
+
+                break;
+            }
+        }
+
+        // Build context: show the error line and one line above/below
+        $contextLines = [];
+        $start = max(0, $errorLine - 2);
+        $end = min($totalLines - 1, $errorLine);
+        for ($i = $start; $i <= $end; $i++) {
+            $lineNum = $i + 1;
+            $marker = ($lineNum === $errorLine) ? ' >>>' : '    ';
+            $contextLines[] = "{$marker} L{$lineNum}: ".rtrim($lines[$i]);
+        }
+
+        return [
+            'line' => $errorLine,
+            'column' => $errorColumn,
+            'context' => implode(' | ', $contextLines),
+        ];
+    }
+
+    /**
+     * Close any open JSON structures so partial JSON can be tested for parse validity.
+     */
+    protected function closeJsonStructures(string $partialJson): string
+    {
+        $openBraces = 0;
+        $openBrackets = 0;
+        $inString = false;
+        $escaped = false;
+        $len = strlen($partialJson);
+
+        for ($i = 0; $i < $len; $i++) {
+            $char = $partialJson[$i];
+
+            if ($escaped) {
+                $escaped = false;
+
+                continue;
+            }
+            if ($char === '\\' && $inString) {
+                $escaped = true;
+
+                continue;
+            }
+            if ($char === '"') {
+                $inString = ! $inString;
+
+                continue;
+            }
+            if ($inString) {
+                continue;
+            }
+
+            if ($char === '{') {
+                $openBraces++;
+            } elseif ($char === '}') {
+                $openBraces--;
+            } elseif ($char === '[') {
+                $openBrackets++;
+            } elseif ($char === ']') {
+                $openBrackets--;
+            }
+        }
+
+        // If we're inside a string, close it
+        if ($inString) {
+            $partialJson .= '"';
+        }
+
+        // Remove any trailing comma before closing
+        $partialJson = preg_replace('/,\s*$/', '', $partialJson);
+
+        // Close open structures
+        $partialJson .= str_repeat(']', max(0, $openBrackets));
+        $partialJson .= str_repeat('}', max(0, $openBraces));
+
+        return $partialJson;
+    }
+
+    /**
+     * Estimate the column position of an error within a single JSON line.
+     */
+    protected function estimateErrorColumn(string $line): int
+    {
+        $trimmed = rtrim($line);
+        $len = strlen($trimmed);
+
+        // Common JSON issues: trailing comma, missing comma, unquoted key
+        // Check for trailing comma before } or ]
+        if (preg_match('/,\s*$/', $trimmed)) {
+            return $len;
+        }
+
+        // Return end of meaningful content as best guess
+        return max(1, $len);
     }
 
     public function resolveViewComponent(string $modelName, ?string $componentKey, ?string $columnsParam): array
@@ -1606,7 +1801,7 @@ class ComponentConfigService
 
         $viewCfg = $this->loadViewConfig($modelName);
         if (empty($viewCfg)) {
-            throw new \InvalidArgumentException('view config file missing for model');
+            throw new \InvalidArgumentException("View config file missing for model '{$modelName}'");
         }
         if (! array_key_exists($componentKey, $viewCfg)) {
             throw new \InvalidArgumentException('component key not found in view config');

@@ -5,10 +5,11 @@
     "pagination": "on",
     "datalink": "on",
     "button": ["create", "edit", "delete"],
-    "actions": [
-      { "type": "create", "label": "Create" },
-      { "type": "edit", "label": "Edit" },
-      { "type": "delete", "label": "Delete" }
-    ]
+    "showActions": true,
+    "actions":{
+      "showView": true,
+      "showEdit": true,
+      "showDelete": true
+    }
   }
 }

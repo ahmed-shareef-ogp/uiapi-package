@@ -2,6 +2,8 @@
 
 namespace Ogp\UiApi\Services;
 
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class ModelGeneratorService
@@ -188,6 +190,96 @@ class ModelGeneratorService
 
         return [
             'table' => $table,
+            'columns' => $columns,
+            'timestamps' => $timestamps,
+        ];
+    }
+
+    /**
+     * Extract all table names from a SQL file that may contain multiple CREATE TABLE statements.
+     *
+     * @return array<int, string>
+     */
+    public function extractAllTableNames(string $sqlPath): array
+    {
+        if (! file_exists($sqlPath)) {
+            throw new \InvalidArgumentException("SQL file not found: {$sqlPath}");
+        }
+
+        $content = file_get_contents($sqlPath);
+        preg_match_all('/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\']?(\w+)[`"\']?\s*\(/i', $content, $matches);
+
+        return $matches[1] ?? [];
+    }
+
+    /**
+     * Parse a specific table from a SQL file that may contain multiple CREATE TABLE statements.
+     *
+     * Splits the content by CREATE TABLE boundaries, finds the block for the
+     * requested table, then delegates to the existing column/FK extractors.
+     *
+     * @return array{table: string, columns: array<string, array{type: string, nullable: bool, default: mixed, unique: bool, foreign: ?array{table: string, column: string}}>, timestamps: bool}
+     */
+    public function parseSqlDumpForTable(string $sqlPath, string $tableName): array
+    {
+        if (! file_exists($sqlPath)) {
+            throw new \InvalidArgumentException("SQL file not found: {$sqlPath}");
+        }
+
+        $content = file_get_contents($sqlPath);
+
+        // Split into blocks per CREATE TABLE and find the matching one
+        $pattern = '/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\']?(\w+)[`"\']?\s*\(/i';
+        $parts = preg_split($pattern, $content, -1, PREG_SPLIT_DELIM_CAPTURE);
+
+        $tableBlock = null;
+        for ($i = 1; $i < count($parts); $i += 2) {
+            if (strcasecmp($parts[$i], $tableName) === 0) {
+                // Reconstruct the CREATE TABLE statement for this table
+                $tableBlock = 'CREATE TABLE `'.$parts[$i].'` ('.$parts[$i + 1];
+                break;
+            }
+        }
+
+        if ($tableBlock === null) {
+            throw new \InvalidArgumentException("Table '{$tableName}' not found in SQL file.");
+        }
+
+        $columns = $this->extractColumnsFromSql($tableBlock);
+        if (empty($columns)) {
+            throw new \InvalidArgumentException("No columns could be parsed for table '{$tableName}'.");
+        }
+
+        $foreignKeys = $this->extractForeignKeysFromSql($tableBlock);
+        foreach ($foreignKeys as $colName => $fk) {
+            if (isset($columns[$colName]) && $columns[$colName]['foreign'] === null) {
+                $columns[$colName]['foreign'] = $fk;
+            }
+        }
+
+        // Also check ALTER TABLE statements in the full content for this table
+        $alterFks = $this->extractForeignKeysFromSql($content);
+        foreach ($alterFks as $colName => $fk) {
+            if (isset($columns[$colName]) && $columns[$colName]['foreign'] === null) {
+                $columns[$colName]['foreign'] = $fk;
+            }
+        }
+
+        // Infer FK from _id suffix columns
+        foreach ($columns as $colName => $colDef) {
+            if ($colDef['foreign'] === null && Str::endsWith($colName, '_id')) {
+                $base = Str::beforeLast($colName, '_id');
+                $columns[$colName]['foreign'] = [
+                    'table' => Str::plural(Str::snake($base)),
+                    'column' => 'id',
+                ];
+            }
+        }
+
+        $timestamps = isset($columns['created_at']) && isset($columns['updated_at']);
+
+        return [
+            'table' => $tableName,
             'columns' => $columns,
             'timestamps' => $timestamps,
         ];
@@ -414,7 +506,7 @@ PHP;
                 $relatedTable = $colDef['foreign']['table'];
                 // Guess a display column on the related table
                 $displayCol = $this->guessRelatedDisplayColumn($relatedTable);
-                $dotColumns[] = $relationName . '.' . $displayCol;
+                $dotColumns[] = $relationName.'.'.$displayCol;
             }
         }
 
@@ -443,11 +535,11 @@ PHP;
                     ],
                     'form' => [
                         'createTitle' => [
-                            'en' => 'Create ' . $this->humanize($modelName),
+                            'en' => 'Create '.$this->humanize($modelName),
                             'dv' => 'TODO',
                         ],
                         'editTitle' => [
-                            'en' => 'Edit ' . $this->humanize($modelName),
+                            'en' => 'Edit '.$this->humanize($modelName),
                             'dv' => 'TODO',
                         ],
                         'groups' => [
@@ -618,10 +710,10 @@ PHP;
             $displayCol = $this->guessRelatedDisplayColumn($relTable);
             $lines[] = "                    'filterable' => [";
             $lines[] = "                        'mode' => 'relation',";
-            $lines[] = "                        'relationship' => '" . $this->foreignKeyToRelationName($colName) . "',";
+            $lines[] = "                        'relationship' => '".$this->foreignKeyToRelationName($colName)."',";
             $lines[] = "                        'itemTitle' => '{$displayCol}',";
             $lines[] = "                        'itemValue' => 'id',";
-            $lines[] = "                    ],";
+            $lines[] = '                    ],';
         }
 
         $lines[] = '                ],';
@@ -914,6 +1006,7 @@ PHP;
     {
         // Common display column names
         $common = ['name', 'title', 'name_eng', 'name_en', 'first_name_eng', 'label'];
+
         // For now return 'name' as a safe default; the developer should adjust
         return 'name';
     }
@@ -966,12 +1059,228 @@ PHP;
 
         $pad = str_repeat('    ', $indent);
         $innerPad = str_repeat('    ', $indent + 1);
-        $lines = ["["];
+        $lines = ['['];
         foreach ($arr as $val) {
             $lines[] = "{$innerPad}'{$val}',";
         }
         $lines[] = "{$pad}]";
 
         return implode("\n", $lines);
+    }
+
+    // ─── Model introspection ────────────────────────────────────────
+
+    /**
+     * Check if a model class has an apiSchema() method.
+     *
+     * @param  class-string  $fqcn  Fully qualified class name
+     */
+    public function modelHasApiSchema(string $fqcn): bool
+    {
+        if (! class_exists($fqcn)) {
+            return false;
+        }
+
+        return method_exists($fqcn, 'apiSchema');
+    }
+
+    /**
+     * Extract migrationData-format column definitions from a model's apiSchema().
+     *
+     * This allows generateViewConfig() to work from an existing model
+     * without needing the original SQL or migration file.
+     *
+     * @param  class-string  $fqcn  Fully qualified class name
+     * @return array{table: string, columns: array, timestamps: bool}
+     */
+    public function extractMigrationDataFromModel(string $fqcn): array
+    {
+        if (! class_exists($fqcn)) {
+            throw new \InvalidArgumentException("Model class not found: {$fqcn}");
+        }
+
+        $model = new $fqcn;
+        $table = $model->getTable();
+
+        if (! method_exists($model, 'apiSchema')) {
+            throw new \RuntimeException("Model {$fqcn} does not have an apiSchema() method.");
+        }
+
+        $schema = $model->apiSchema();
+        $apiColumns = $schema['columns'] ?? [];
+
+        $columns = [];
+        foreach ($apiColumns as $colName => $colDef) {
+            $columns[$colName] = [
+                'type' => $this->reverseApiSchemaType($colDef['type'] ?? 'string'),
+                'nullable' => $this->inferNullableFromApiSchema($colDef),
+                'default' => null,
+                'unique' => false,
+                'foreign' => $this->inferForeignFromApiSchema($colName, $colDef),
+            ];
+        }
+
+        $timestamps = array_key_exists('created_at', $apiColumns)
+            || array_key_exists('updated_at', $apiColumns);
+
+        return [
+            'table' => $table,
+            'columns' => $columns,
+            'timestamps' => $timestamps,
+        ];
+    }
+
+    /**
+     * Build migrationData from database introspection (DESCRIBE / column listing).
+     *
+     * This is used when a model has no apiSchema() and the user wants to
+     * generate one from the database structure.
+     */
+    public function extractMigrationDataFromDatabase(string $tableName): array
+    {
+        if (! Schema::hasTable($tableName)) {
+            throw new \InvalidArgumentException("Table '{$tableName}' does not exist in the database.");
+        }
+
+        $dbColumns = DB::select("SHOW COLUMNS FROM `{$tableName}`");
+        $foreignKeys = $this->extractForeignKeysFromDatabase($tableName);
+
+        $columns = [];
+        $timestamps = false;
+
+        foreach ($dbColumns as $col) {
+            $name = $col->Field;
+
+            if (in_array($name, ['created_at', 'updated_at'])) {
+                $timestamps = true;
+
+                continue;
+            }
+
+            $columns[$name] = [
+                'type' => $this->dbColumnTypeToMigrationDataType($col->Type),
+                'nullable' => $col->Null === 'YES',
+                'default' => $col->Default,
+                'unique' => $col->Key === 'UNI',
+                'foreign' => $foreignKeys[$name] ?? null,
+            ];
+        }
+
+        return [
+            'table' => $tableName,
+            'columns' => $columns,
+            'timestamps' => $timestamps,
+        ];
+    }
+
+    /**
+     * Extract foreign key definitions from the database for a given table.
+     *
+     * @return array<string, array{table: string, column: string}>
+     */
+    protected function extractForeignKeysFromDatabase(string $tableName): array
+    {
+        $fks = DB::select(
+            'SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+             FROM information_schema.KEY_COLUMN_USAGE
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = ?
+               AND REFERENCED_TABLE_NAME IS NOT NULL',
+            [$tableName]
+        );
+
+        $result = [];
+        foreach ($fks as $fk) {
+            $result[$fk->COLUMN_NAME] = [
+                'table' => $fk->REFERENCED_TABLE_NAME,
+                'column' => $fk->REFERENCED_COLUMN_NAME,
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Reverse-map apiSchema type back to migrationData type.
+     */
+    protected function reverseApiSchemaType(string $apiType): string
+    {
+        return match ($apiType) {
+            'number' => 'integer',
+            'boolean' => 'boolean',
+            'date' => 'date',
+            'json' => 'json',
+            default => 'string',
+        };
+    }
+
+    /**
+     * Infer nullable from apiSchema column definition.
+     */
+    protected function inferNullableFromApiSchema(array $colDef): bool
+    {
+        $rule = $colDef['validationRule'] ?? '';
+
+        return str_contains($rule, 'nullable');
+    }
+
+    /**
+     * Infer foreign key info from an apiSchema column definition.
+     *
+     * @return array{table: string, column: string}|null
+     */
+    protected function inferForeignFromApiSchema(string $colName, array $colDef): ?array
+    {
+        // Check filterable relationship
+        $filterable = $colDef['filterable'] ?? [];
+        if (! empty($filterable['relationship'])) {
+            $relationName = $filterable['relationship'];
+
+            return [
+                'table' => Str::plural(Str::snake($relationName)),
+                'column' => 'id',
+            ];
+        }
+
+        // Check select relationship
+        $select = $colDef['select'] ?? [];
+        if (! empty($select['relationship'])) {
+            $relationName = $select['relationship'];
+
+            return [
+                'table' => Str::plural(Str::snake($relationName)),
+                'column' => 'id',
+            ];
+        }
+
+        // Infer from column name pattern (e.g. country_id → countries.id)
+        if (Str::endsWith($colName, '_id') && $colName !== 'id') {
+            $base = Str::beforeLast($colName, '_id');
+
+            return [
+                'table' => Str::plural($base),
+                'column' => 'id',
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * Map a MySQL column type string to the normalized migrationData type.
+     */
+    protected function dbColumnTypeToMigrationDataType(string $dbType): string
+    {
+        $dbType = strtolower($dbType);
+
+        return match (true) {
+            str_contains($dbType, 'int') => 'integer',
+            str_contains($dbType, 'decimal') || str_contains($dbType, 'float') || str_contains($dbType, 'double') => 'number',
+            str_contains($dbType, 'tinyint(1)') || $dbType === 'boolean' => 'boolean',
+            str_contains($dbType, 'date') || str_contains($dbType, 'timestamp') => 'date',
+            str_contains($dbType, 'json') => 'json',
+            str_contains($dbType, 'text') || str_contains($dbType, 'varchar') || str_contains($dbType, 'char') => 'string',
+            default => 'string',
+        };
     }
 }
