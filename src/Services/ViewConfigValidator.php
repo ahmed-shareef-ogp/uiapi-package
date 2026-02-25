@@ -53,17 +53,156 @@ class ViewConfigValidator
             return $this->results;
         }
 
-        foreach ($viewConfig as $componentKey => $compBlock) {
-            if (! is_array($compBlock)) {
+        // Separate views from component definitions
+        $views = [];
+        $components = [];
+
+        foreach ($viewConfig as $key => $block) {
+            if (! is_array($block)) {
                 continue;
             }
 
+            if (str_contains($key, 'View')) {
+                $views[$key] = $block;
+            } else {
+                $components[$key] = $block;
+            }
+        }
+
+        // Enrich components with lang from views (for validation purposes)
+        $enrichedComponents = $this->enrichComponentsWithViewContext($components, $views);
+
+        // Validate component definitions (root keys) with enriched data
+        foreach ($enrichedComponents as $componentKey => $compBlock) {
             $prefix = $componentKey;
             $this->resolveColumnsSchemaForBlock($compBlock, $modelName);
             $this->validateCompBlock($compBlock, $prefix, $modelName);
         }
 
+        // Validate views
+        foreach ($views as $viewKey => $viewBlock) {
+            $this->validateView($viewBlock, $viewKey, $viewConfig, $modelName);
+        }
+
         return $this->results;
+    }
+
+    /**
+     * Enrich components with context from views (e.g., lang)
+     */
+    protected function enrichComponentsWithViewContext(array $components, array $views): array
+    {
+        $enriched = $components;
+
+        // Find lang from first view that references each component
+        foreach ($enriched as $componentKey => &$compBlock) {
+            // Skip if component already has lang
+            if (isset($compBlock['lang']) && is_array($compBlock['lang']) && ! empty($compBlock['lang'])) {
+                continue;
+            }
+
+            // Look for a view that references this component
+            foreach ($views as $viewBlock) {
+                $viewComponents = $viewBlock['components'] ?? null;
+                if (! is_array($viewComponents)) {
+                    continue;
+                }
+
+                // Check if this view references our component
+                foreach ($viewComponents as $reference) {
+                    $refComponent = $reference;
+
+                    // Handle "modelName/componentKey" format
+                    if (str_contains($reference, '/')) {
+                        [, $refComponent] = explode('/', $reference, 2);
+                    }
+
+                    // If this view references our component and has lang, inherit it
+                    if ($refComponent === $componentKey && isset($viewBlock['lang']) && is_array($viewBlock['lang'])) {
+                        $compBlock['lang'] = $viewBlock['lang'];
+                        break 2; // Found lang, move to next component
+                    }
+                }
+            }
+        }
+
+        return $enriched;
+    }
+
+    /**
+     * Validate a view definition
+     */
+    protected function validateView(array $viewBlock, string $viewKey, array $fullConfig, string $modelName): void
+    {
+        $prefix = $viewKey;
+
+        // RULE: View must have a "components" key
+        if (! array_key_exists('components', $viewBlock)) {
+            $this->addError(
+                "{$prefix}",
+                'view_requires_components',
+                "View '{$viewKey}' must have a 'components' configuration."
+            );
+
+            return;
+        }
+
+        $components = $viewBlock['components'];
+        if (! is_array($components) || empty($components)) {
+            $this->addError(
+                "{$prefix}.components",
+                'components_must_be_array',
+                "View '{$viewKey}' components must be a non-empty array."
+            );
+
+            return;
+        }
+
+        // Validate each component reference
+        foreach ($components as $alias => $reference) {
+            $this->validateComponentReference($reference, "{$prefix}.components.{$alias}", $fullConfig, $modelName);
+        }
+    }
+
+    /**
+     * Validate a component reference (e.g., "cform/table" or "table")
+     */
+    protected function validateComponentReference(string $reference, string $prefix, array $fullConfig, string $modelName): void
+    {
+        // Parse reference: "modelName/componentKey" or just "componentKey"
+        if (str_contains($reference, '/')) {
+            [$refModel, $refComponent] = explode('/', $reference, 2);
+
+            // Check if it's a self-reference (same model)
+            $isSelfReference = strtolower($refModel) === strtolower($modelName);
+
+            if ($isSelfReference) {
+                // Check if component exists in current config
+                if (! array_key_exists($refComponent, $fullConfig)) {
+                    $this->addError(
+                        $prefix,
+                        'component_not_found',
+                        "Component '{$refComponent}' referenced but not defined in view config."
+                    );
+                }
+            } else {
+                // Cross-model reference - just warn
+                $this->addWarning(
+                    $prefix,
+                    'cross_model_reference',
+                    "Component reference '{$reference}' points to another model. Ensure '{$refModel}' view config exists."
+                );
+            }
+        } else {
+            // Local reference - check if component exists in current config
+            if (! array_key_exists($reference, $fullConfig)) {
+                $this->addError(
+                    $prefix,
+                    'component_not_found',
+                    "Component '{$reference}' referenced but not defined in view config."
+                );
+            }
+        }
     }
 
     /**
@@ -142,26 +281,42 @@ class ViewConfigValidator
         $this->ruleColumnCustomizationsReferenceValidKeys($compBlock, $prefix);
 
         // ── Component-specific rules ──
+        // Check if this is a component definition (root-level) or contains nested components (old structure)
         $components = is_array($compBlock['components'] ?? null) ? $compBlock['components'] : [];
-        foreach ($components as $compName => $compConfig) {
-            if (! is_array($compConfig)) {
-                continue;
-            }
-            $compPrefix = "{$prefix}.components.{$compName}";
 
-            if ($compName === 'form') {
-                // Form has its own comprehensive validation (includes functions)
-                $this->validateFormComponent($compConfig, $compPrefix);
-            } else {
-                // Validate functions inside non-form components
-                if (is_array($compConfig['functions'] ?? null)) {
-                    $this->ruleFunctionsRequireFileAndFunction($compConfig['functions'], $compPrefix);
+        if (empty($components)) {
+            // This is a component definition itself (new architecture: root keys like "table", "form")
+            // Validate functions at root level
+            if (is_array($compBlock['functions'] ?? null)) {
+                $this->ruleFunctionsRequireFileAndFunction($compBlock['functions'], $prefix);
+            }
+
+            // For form component definition, run form-specific validation
+            if ($prefix === 'form' || str_ends_with($prefix, '.form')) {
+                $this->validateFormComponent($compBlock, $prefix);
+            }
+        } else {
+            // Old structure with nested components (or this might be a view mistakenly validated as component)
+            foreach ($components as $compName => $compConfig) {
+                if (! is_array($compConfig)) {
+                    continue;
                 }
-            }
+                $compPrefix = "{$prefix}.components.{$compName}";
 
-            // Validate columnCustomizations inside any component
-            if (is_array($compConfig['columnCustomizations'] ?? null)) {
-                $this->validateColumnCustomizations($compConfig['columnCustomizations'], $compPrefix);
+                if ($compName === 'form') {
+                    // Form has its own comprehensive validation (includes functions)
+                    $this->validateFormComponent($compConfig, $compPrefix);
+                } else {
+                    // Validate functions inside non-form components
+                    if (is_array($compConfig['functions'] ?? null)) {
+                        $this->ruleFunctionsRequireFileAndFunction($compConfig['functions'], $compPrefix);
+                    }
+                }
+
+                // Validate columnCustomizations inside any component
+                if (is_array($compConfig['columnCustomizations'] ?? null)) {
+                    $this->validateColumnCustomizations($compConfig['columnCustomizations'], $compPrefix);
+                }
             }
         }
 
@@ -257,25 +412,44 @@ class ViewConfigValidator
      */
     protected function ruleColumnsRequired(array $compBlock, string $prefix): void
     {
+        // This rule only applies to views (which have component references)
         $components = is_array($compBlock['components'] ?? null) ? $compBlock['components'] : [];
-        $hasTable = array_key_exists('table', $components);
 
-        if (! $hasTable) {
+        // If components is empty or has array values (old nested structure), skip
+        if (empty($components)) {
             return;
         }
 
+        // Check if any component reference points to "table"
+        $hasTableReference = false;
+        foreach ($components as $reference) {
+            if (!is_string($reference)) {
+                continue;
+            }
+
+            // Parse "modelName/componentKey" or just "componentKey"
+            $componentKey = $reference;
+            if (str_contains($reference, '/')) {
+                [, $componentKey] = explode('/', $reference, 2);
+            }
+
+            if ($componentKey === 'table') {
+                $hasTableReference = true;
+                break;
+            }
+        }
+
+        if (!$hasTableReference) {
+            return;
+        }
+
+        // View references a table component, so it should have columns defined at root level
         $rootColumns = $compBlock['columns'] ?? null;
-        $tableComponent = is_array($components['table'] ?? null) ? $components['table'] : [];
-        $tableColumns = $tableComponent['columns'] ?? null;
-
-        $hasRootColumns = is_array($rootColumns) && ! empty($rootColumns);
-        $hasTableColumns = is_array($tableColumns) && ! empty($tableColumns);
-
-        if (! $hasRootColumns && ! $hasTableColumns) {
+        if (!is_array($rootColumns) || empty($rootColumns)) {
             $this->addError(
                 "{$prefix}.columns",
                 'columns_required',
-                '"columns" must be defined either at the root level or inside "components.table.columns" when using a table component.'
+                'Views that reference a "table" component must define "columns" at the root level.'
             );
         }
     }
@@ -806,19 +980,25 @@ class ViewConfigValidator
 
         $configDir = __DIR__.'/ComponentConfigs';
 
-        foreach (array_keys($components) as $compName) {
-            if (! is_string($compName)) {
+        foreach ($components as $alias => $reference) {
+            if (! is_string($reference)) {
                 continue;
             }
 
-            // Check if a config file exists
-            $configPath = $configDir.'/'.basename($compName).'.json';
+            // Parse reference: "modelName/componentKey" or just "componentKey"
+            $componentKey = $reference;
+            if (str_contains($reference, '/')) {
+                [, $componentKey] = explode('/', $reference, 2);
+            }
+
+            // Check if a config file exists for the component key
+            $configPath = $configDir.'/'.basename($componentKey).'.json';
             if (! File::exists($configPath)) {
                 // It's not a fatal error since components may be pass-through, but worth noting
                 $this->addWarning(
-                    "{$prefix}.components.{$compName}",
+                    "{$prefix}.components.{$alias}",
                     'component_config_exists',
-                    "Component \"{$compName}\" does not have a matching config file in ComponentConfigs/. Expected: {$compName}.json"
+                    "Component \"{$componentKey}\" (referenced as \"{$reference}\") does not have a matching config file in ComponentConfigs/. Expected: {$componentKey}.json"
                 );
             }
         }

@@ -30,9 +30,13 @@ php artisan optimize:clear
 By default routes are registered under `/{prefix}` where `prefix = config('uiapi.route_prefix', 'api')`.
 
 - Component Config Service (CCS)
-  - GET `/{prefix}/ccs/{model}` → returns component settings for the given model and `component` key
-    - Required: `component=listView` (or another key present in your view config)
+  - GET `/{prefix}/ccs/{model}?view={viewKey}` → returns component settings for all components in the view
+    - Required: `view` parameter (e.g., `view=listView`)
     - Optional: `lang` — defaults to `dv` if omitted (supports `en`, `dv` where applicable)
+  - GET `/{prefix}/ccs/{model}?component={componentKey}` → returns full payload for a specific component
+    - Required: `component` parameter (e.g., `component=table`)
+    - Optional: `lang` — defaults to `dv` if omitted
+    - Supports cross-model references: `component=person/form` to fetch form component from person model
 
 - Generic API CRUD (GAPI)
   - GET `/{prefix}/gapi/{model}` → list/index
@@ -76,44 +80,65 @@ Responses:
 - Non‑paginated: `{ data: [...] }`
 
 ## View Configs (UI Component Settings)
-View configs are JSON files per model (lowercase filename, no hyphens, no underscores or spaces) and can define multiple views (e.g., `listView`). Default path: `app/Services/viewConfigs`.
+View configs are JSON files per model (lowercase filename, no hyphens, no underscores or spaces) and support multiple views and reusable components. Default path: `app/Services/viewConfigs`.
 
-Common keys:
-- `components`: components to assemble. Currently `table` and `filterSection` are supported.
-- `columns`: the fields to include for the view. Use relation tokens like `country.name_eng`.
+### Architecture: Views and Components
+
+**Views** (keys containing "View") reference reusable components and define view-specific settings:
+- `components`: object mapping aliases to component references (e.g., `{"table": "cform/table"}`)
+- `columns`: fields to include; supports relation tokens like `country.name_eng`
 - `columnCustomizations`: per‑column overrides for labels, visibility, display types, etc.
-- `filters`: whitelisted fields for filter UI.
-- `per_page`: default page size for component settings.
-- `lang`: allowed UI languages for this view (e.g., `["en","dv"]`). If the request `lang` isn’t allowed, the service returns an informative message.
+- `filters`: whitelisted fields for filter UI
+- `per_page`: default page size
+- `lang`: allowed UI languages (e.g., `["en","dv"]`)
 
-Example (`app/Services/viewConfigs/person.json`):
+**Components** (root-level keys without "View") contain component-specific customizations and inherit `lang` from views.
+
+### Component References
+- Local: `"table"` → references `table` component in same file
+- Cross-model: `"person/form"` → references `form` from `person.json`
+
+### Request Types
+- View: `GET /api/ccs/{model}?view=listView` → returns `componentSettings` for all components
+- Component: `GET /api/ccs/{model}?component=table` → returns full payload for single component
+
+Example (`app/Services/viewConfigs/cform.json`):
 ```json
 {
   "listView": {
     "components": {
-      "table": {},
-      "filterSection": { "buttons": ["submit", "clear"] }
+      "table": "cform/table",
+      "toolbar": "cform/toolbar",
+      "filterSection": "cform/filterSection"
     },
-    "columns": [
-      "country_id", "id", "country.name_eng", "first_name_eng",
-      "first_name_div", "gender", "is_in_custody", "date_of_birth"
-    ],
+    "columns": ["id", "ref_num", "status", "created_at"],
     "columnCustomizations": {
-      "is_in_custody": {
-        "title": { "en": "ISINCUSTODY", "dv": "" },
-        "sortable": true,
-        "hidden": false,
-        "displayType": "checkbox",
-        "inlineEditable": true,
-        "displayProps": { "color": "primary" }
+      "ref_num": {
+        "width": "200px",
+        "sortable": true
       }
     },
-    "filters": ["gender", "country_id", "date_of_birth"],
-    "per_page": 11,
+    "filters": ["status", "ref_num"],
+    "per_page": 15,
     "lang": ["en", "dv"]
+  },
+  "table": {
+    "columns": ["id", "ref_num", "summary", "status"],
+    "functions": {
+      "customeColumnData": {
+        "file": "misc.js",
+        "function": "customeColumnData"
+      }
+    }
+  },
+  "toolbar": {
+    "title": { "en": "Forms", "dv": "ސަރަހައްދު" },
+    "buttons": ["search", "clear"]
   }
 }
 ```
+
+Component templates in `ComponentConfigs/*.json` define base behavior (headers, pagination, datalink, etc.). When requesting a component, the service merges the template with view config customizations, processes "on/off" values, applies overrides, and returns the localized payload.
 
 ### NoModel View Configs
 In some views, you can build UI payloads without an Eloquent model by setting `noModel: true` on the view config block. In this mode, the returned payload is derived entirely from the JSON config — specifically from `columns`, `columnsSchema`, optional `columnCustomizations`, `filters`, and `per_page`.
@@ -166,7 +191,14 @@ Component configuration templates live in the package at `src/Services/Component
 
 ### Fetch Component Settings
 ```bash
-curl "http://localhost/api/ccs/person?component=listView&lang=en"
+# Fetch view with all component settings
+curl "http://localhost/api/ccs/cform?view=listView&lang=en"
+
+# Fetch specific component payload
+curl "http://localhost/api/ccs/cform?component=table&lang=en"
+
+# Fetch cross-model component
+curl "http://localhost/api/ccs/cform?component=person/form&lang=dv"
 ```
 If `lang` is omitted, it defaults to `dv`.
 

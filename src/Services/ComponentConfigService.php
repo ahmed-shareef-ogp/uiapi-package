@@ -688,10 +688,21 @@ class ComponentConfigService
     public function index(Request $request, string $modelName)
     {
         $this->logDebug('Entering index', ['method' => __METHOD__, 'model' => $modelName]);
+
+        // Determine if this is a view request or component request
+        $viewParam = $request->query('view');
+        $componentParam = $request->query('component');
+
+        // Handle view request - return componentSettings only
+        if ($viewParam && ! $componentParam) {
+            return $this->handleViewRequest($request, $modelName, $viewParam);
+        }
+
+        // Handle component request - return full component payload
         try {
             $resolvedComp = $this->resolveViewComponent(
                 $modelName,
-                $request->query('component'),
+                $componentParam,
                 $request->query('columns')
             );
         } catch (\InvalidArgumentException $e) {
@@ -700,6 +711,7 @@ class ComponentConfigService
 
         $compBlock = $resolvedComp['compBlock'];
         $columnsParam = $resolvedComp['columnsParam'];
+        $targetModel = $resolvedComp['targetModel'] ?? $modelName;
 
         // Determine noModel vs model-backed flow
         $isNoModel = (bool) ($compBlock['noModel'] ?? false);
@@ -714,9 +726,9 @@ class ComponentConfigService
                 ], 422);
             }
         } else {
-            $resolved = $this->resolveModel($modelName);
+            $resolved = $this->resolveModel($targetModel);
             if (! $resolved) {
-                return response()->json(['error' => "Model '$modelName' not found or missing apiSchema()"], 422);
+                return response()->json(['error' => "Model '$targetModel' not found or missing apiSchema()"], 422);
             }
             [$fqcn, $modelInstance, $schema] = $resolved;
             $columnsSchema = $schema['columns'] ?? [];
@@ -725,9 +737,9 @@ class ComponentConfigService
         // Run view config validation at debug_level 2+
         $validationWarnings = null;
         if ($this->debugLevel >= 2) {
-            $fullViewCfg = $this->loadViewConfig($modelName);
+            $fullViewCfg = $this->loadViewConfig($targetModel);
             $validator = new ViewConfigValidator;
-            $validationResults = $validator->validate($fullViewCfg, $modelName);
+            $validationResults = $validator->validate($fullViewCfg, $targetModel);
             if ($validator->hasErrors()) {
                 return response()->json([
                     'error' => 'View config validation failed',
@@ -771,6 +783,42 @@ class ComponentConfigService
         $component = (string) ($resolvedComp['componentKey'] ?? '');
         $columnCustomizations = $this->getColumnCustomizationsFromComponent($compBlock);
         $allowedFilters = $this->getAllowedFiltersFromComponent($compBlock);
+
+        // If this is a direct component request (not a view), build and return the component payload
+        if ($componentParam && ! $viewParam) {
+            $componentKey = $resolvedComp['componentKey'] ?? $componentParam;
+            $componentConfig = $this->loadComponentConfig($componentKey);
+
+            if (empty($componentConfig)) {
+                return response()->json([
+                    'error' => "Component config '{$componentKey}' not found",
+                ], 422);
+            }
+
+            // Build the section payload from base component config first
+            $baseConfig = $componentConfig[$componentKey] ?? [];
+            $componentPayload = $this->buildSectionPayload(
+                $baseConfig,
+                $columnsSchema,
+                $effectiveTokens,
+                $lang,
+                $perPage,
+                $targetModel,
+                $modelInstance,
+                $columnCustomizations,
+                $allowedFilters
+            );
+
+            // Apply view config overrides (e.g., buttons: ["search", "clear"] filters the full button definitions)
+            if (is_array($compBlock) && !empty($compBlock)) {
+                $componentPayload = $this->applyOverridesToSection($componentPayload, $compBlock, $lang);
+            }
+
+            // Collapse localized keys (e.g., {en, dv} → single lang value)
+            $componentPayload = $this->collapseLocalizedKeys($componentPayload, $lang);
+
+            return response()->json($componentPayload);
+        }
 
         // Build component settings
         $componentSettingsQuery = $request->query('componentSettings');
@@ -1334,7 +1382,18 @@ class ComponentConfigService
             }
             if ($key === 'filters') {
                 if ($val === 'on') {
-                    $out['filters'] = $this->buildFilters($columnsSchema, $modelName, $lang, $allowedFilters, $modelInstance);
+                    // Merge columnCustomizations into columnsSchema for filters
+                    $effectiveSchema = $columnsSchema;
+                    if (is_array($columnCustomizations) && !empty($columnCustomizations)) {
+                        foreach ($columnCustomizations as $colKey => $customization) {
+                            if (isset($effectiveSchema[$colKey]) && is_array($effectiveSchema[$colKey])) {
+                                $effectiveSchema[$colKey] = array_merge($effectiveSchema[$colKey], $customization);
+                            } elseif (!isset($effectiveSchema[$colKey])) {
+                                $effectiveSchema[$colKey] = $customization;
+                            }
+                        }
+                    }
+                    $out['filters'] = $this->buildFilters($effectiveSchema, $modelName, $lang, $allowedFilters, $modelInstance);
                 } elseif ($val !== 'off') {
                     $out['filters'] = $val;
                 }
@@ -1583,14 +1642,36 @@ class ComponentConfigService
                 $source = is_array($cfg) ? $cfg : (is_array($legacy) ? $legacy : []);
                 $mode = strtolower((string) ($source['mode'] ?? 'self'));
 
-                $rawItemTitle = $source['itemTitle'] ?? $key;
-                $itemTitle = is_array($rawItemTitle)
-                    ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $key)
-                    : (string) $rawItemTitle;
-                $itemValue = (string) ($source['itemValue'] ?? $key);
+                // Determine itemTitle and itemValue keys
+                // Check for language-specific keys first (itemTitleEn, itemTitleDv)
+                $rawItemTitle = $source['itemTitle'] ?? null;
+                $itemTitleKey = null;
+                $itemValueKey = $source['itemValue'] ?? 'itemValue';
 
-                $filter['itemTitle'] = $itemTitle;
-                $filter['itemValue'] = $itemValue;
+                if ($rawItemTitle === null && is_array($source['items'] ?? null) && !empty($source['items'])) {
+                    // Check first item for language-specific keys
+                    $firstItem = reset($source['items']);
+                    if (is_array($firstItem)) {
+                        $langKey = 'itemTitle' . ucfirst($lang);
+                        if (array_key_exists($langKey, $firstItem)) {
+                            $itemTitleKey = $langKey;
+                        } elseif (array_key_exists('itemTitleEn', $firstItem)) {
+                            $itemTitleKey = 'itemTitleEn';
+                        } elseif (array_key_exists('itemTitleDv', $firstItem)) {
+                            $itemTitleKey = 'itemTitleDv';
+                        }
+                    }
+                }
+
+                if ($itemTitleKey === null) {
+                    $itemTitle = is_array($rawItemTitle)
+                        ? (string) ($rawItemTitle[$lang] ?? $rawItemTitle['en'] ?? reset($rawItemTitle) ?? $key)
+                        : (string) ($rawItemTitle ?? $key);
+                    $itemTitleKey = $itemTitle;
+                }
+
+                $filter['itemTitle'] = $itemTitleKey;
+                $filter['itemValue'] = $itemValueKey;
 
                 if ($mode === 'self') {
                     // Self mode: use items array directly from config
@@ -1600,13 +1681,13 @@ class ComponentConfigService
                         foreach (array_values($items) as $it) {
                             if (is_array($it)) {
                                 $pruned[] = [
-                                    $itemTitle => (string) ($it[$itemTitle] ?? ''),
-                                    $itemValue => (string) ($it[$itemValue] ?? ''),
+                                    $itemTitleKey => (string) ($it[$itemTitleKey] ?? ''),
+                                    $itemValueKey => (string) ($it[$itemValueKey] ?? ''),
                                 ];
                             } else {
                                 $pruned[] = [
-                                    $itemTitle => (string) $it,
-                                    $itemValue => (string) $it,
+                                    $itemTitleKey => (string) $it,
+                                    $itemValueKey => (string) $it,
                                 ];
                             }
                         }
@@ -1870,33 +1951,148 @@ class ComponentConfigService
         return max(1, $len);
     }
 
+    /**
+     * Handle view request - returns only componentSettings
+     */
+    protected function handleViewRequest(Request $request, string $modelName, string $viewKey): mixed
+    {
+        $viewCfg = $this->loadViewConfig($modelName);
+        if (empty($viewCfg)) {
+            return response()->json(['error' => "View config file missing for model '{$modelName}'"], 422);
+        }
+
+        // Find the view (must contain "View" in the key name)
+        if (! str_contains($viewKey, 'View')) {
+            return response()->json(['error' => "Invalid view key '{$viewKey}'. View keys must contain 'View' in the name."], 422);
+        }
+
+        if (! array_key_exists($viewKey, $viewCfg)) {
+            // Try to find first view as default
+            $firstView = $this->getFirstView($viewCfg);
+            if ($firstView) {
+                $viewKey = $firstView;
+            } else {
+                return response()->json(['error' => "View '{$viewKey}' not found in config"], 422);
+            }
+        }
+
+        $viewBlock = $viewCfg[$viewKey] ?? [];
+        $components = $viewBlock['components'] ?? null;
+
+        if (! is_array($components)) {
+            return response()->json(['error' => "View '{$viewKey}' does not have a valid 'components' configuration"], 422);
+        }
+
+        // Return only componentSettings
+        return response()->json([
+            'componentSettings' => $components,
+        ]);
+    }
+
+    /**
+     * Get the first view key from view config (keys containing "View")
+     */
+    protected function getFirstView(array $viewCfg): ?string
+    {
+        foreach (array_keys($viewCfg) as $key) {
+            if (str_contains($key, 'View')) {
+                return $key;
+            }
+        }
+
+        return null;
+    }
+
     public function resolveViewComponent(string $modelName, ?string $componentKey, ?string $columnsParam): array
     {
         if (! $componentKey || ! is_string($componentKey) || $componentKey === '') {
             throw new \InvalidArgumentException('component parameter is required');
         }
 
-        $viewCfg = $this->loadViewConfig($modelName);
+        // Parse component reference: could be "table" or "cform/table" or "person/table"
+        $targetModel = $modelName;
+        $targetComponent = $componentKey;
+
+        if (str_contains($componentKey, '/')) {
+            [$targetModel, $targetComponent] = explode('/', $componentKey, 2);
+        }
+
+        $viewCfg = $this->loadViewConfig($targetModel);
         if (empty($viewCfg)) {
-            throw new \InvalidArgumentException("View config file missing for model '{$modelName}'");
+            throw new \InvalidArgumentException("View config file missing for model '{$targetModel}'");
         }
-        if (! array_key_exists($componentKey, $viewCfg)) {
-            throw new \InvalidArgumentException('component key not found in view config');
+        if (! array_key_exists($targetComponent, $viewCfg)) {
+            throw new \InvalidArgumentException("Component key '{$targetComponent}' not found in view config for model '{$targetModel}'");
         }
-        $compBlock = $viewCfg[$componentKey] ?? [];
+        $compBlock = $viewCfg[$targetComponent] ?? [];
+
+        // Inherit lang from view context if component doesn't have it
+        if (! isset($compBlock['lang']) || ! is_array($compBlock['lang']) || empty($compBlock['lang'])) {
+            $inheritedLang = $this->findLangFromViews($viewCfg, $targetModel, $targetComponent);
+            if ($inheritedLang) {
+                $compBlock['lang'] = $inheritedLang;
+            }
+        }
+
         if (! $columnsParam) {
             $compColumns = $this->getColumnsForComponent($compBlock, 'table');
-            if (! is_array($compColumns) || empty($compColumns)) {
-                throw new \InvalidArgumentException('columns not defined in view config for component');
+            if (is_array($compColumns) && ! empty($compColumns)) {
+                $columnsParam = implode(',', array_map('trim', $compColumns));
+            } else {
+                // Components like 'meta' may not have columns - that's okay
+                $columnsParam = '';
             }
-            $columnsParam = implode(',', array_map('trim', $compColumns));
         }
 
         return [
-            'componentKey' => (string) $componentKey,
+            'componentKey' => (string) $targetComponent,
             'compBlock' => $compBlock,
             'columnsParam' => (string) $columnsParam,
+            'targetModel' => (string) $targetModel,
         ];
+    }
+
+    /**
+     * Find lang configuration from views that reference this component
+     */
+    protected function findLangFromViews(array $viewCfg, string $targetModel, string $targetComponent): ?array
+    {
+        // Look for views that reference this component
+        foreach ($viewCfg as $key => $block) {
+            // Check if this is a view
+            if (! str_contains($key, 'View') || ! is_array($block)) {
+                continue;
+            }
+
+            $components = $block['components'] ?? null;
+            if (! is_array($components)) {
+                continue;
+            }
+
+            // Check if this view references our component
+            foreach ($components as $alias => $reference) {
+                // Parse reference to check if it matches our target
+                $refTarget = $reference;
+                if (str_contains($reference, '/')) {
+                    [$refModel, $refComponent] = explode('/', $reference, 2);
+                    // Check if it's the same model and component
+                    if (strtolower($refModel) === strtolower($targetModel) && $refComponent === $targetComponent) {
+                        $refTarget = $targetComponent;
+                    } else {
+                        continue;
+                    }
+                } else {
+                    $refTarget = $reference;
+                }
+
+                // If this view references our component, return its lang
+                if ($refTarget === $targetComponent && isset($block['lang']) && is_array($block['lang'])) {
+                    return $block['lang'];
+                }
+            }
+        }
+
+        return null;
     }
 
     public function isLangAllowedForComponent(array $compBlock, string $lang): bool
