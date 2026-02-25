@@ -372,6 +372,7 @@ class ViewConfigValidator
     /**
      * RULE 7 & 8: Select mode-specific requirements.
      * - mode "self" requires "items" (non-empty array)
+     * - mode "url" requires "url" (non-empty string)
      * - mode "relation" requires "relationship" string
      */
     protected function ruleSelectModeRequirements(array $cfg, string $prefix): void
@@ -387,7 +388,17 @@ class ViewConfigValidator
                     'Select mode is "self" but "items" is missing or empty. The dropdown will have no options.'
                 );
             }
-        } else {
+        } elseif ($mode === 'url') {
+            // URL mode
+            $url = $cfg['url'] ?? null;
+            if (! is_string($url) || trim($url) === '') {
+                $this->addError(
+                    "{$prefix}.select",
+                    'url_mode_requires_url',
+                    'Select mode is "url" but "url" key is missing or empty. A valid URL string is required.'
+                );
+            }
+        } elseif ($mode === 'relation') {
             // Relation mode
             $relationship = $cfg['relationship'] ?? null;
             if (! is_string($relationship) || $relationship === '') {
@@ -397,6 +408,13 @@ class ViewConfigValidator
                     'Select mode is "relation" but "relationship" is missing. The system will attempt to guess from the key name.'
                 );
             }
+        } else {
+            // Unknown mode - treat as relation for backward compatibility but warn
+            $this->addWarning(
+                "{$prefix}.select",
+                'unknown_select_mode',
+                "Select mode \"{$mode}\" is not recognized. Supported modes are: 'self', 'url', 'relation'. Falling back to relation mode."
+            );
         }
     }
 

@@ -74,7 +74,7 @@ class GenericApiController extends BaseController
                 'en' => 'Unable to update the record.',
             ],
             'unexpected' => [
-                'dv' => 'މައްސަލައެއް ޖެހިއްޖެ. އަނބުރާ ފަހަރުގައި ބަލާލާ.',
+                'dv' => 'މައްސަލައެއް ޖެހިއްޖެ. އަލުން ބަލާލާ.',
                 'en' => 'Something went wrong while processing your request.',
             ],
         ];

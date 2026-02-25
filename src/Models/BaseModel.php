@@ -16,6 +16,7 @@ use Illuminate\Support\Str;
 
 abstract class BaseModel extends Model
 {
+    protected $guarded = [];
     protected array $searchable = [];
 
     protected array $sortable = [];

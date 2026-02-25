@@ -212,6 +212,7 @@ class ComponentConfigService
         ];
 
         if ($mode === 'self') {
+            // Self mode: use items array directly from config
             $items = $cfg['items'] ?? [];
             $outItems = [];
             if (is_array($items)) {
@@ -230,8 +231,45 @@ class ComponentConfigService
                 }
             }
             $out['items'] = $outItems;
+        } elseif ($mode === 'url') {
+            // URL mode: use the URL exactly as defined in config
+            $url = $cfg['url'] ?? null;
+
+            if (! $url || ! is_string($url) || trim($url) === '') {
+                throw new \InvalidArgumentException(
+                    "Select mode 'url' requires a valid 'url' key for field '{$key}'"
+                );
+            }
+
+            // Use URL as-is without modification
+            $out['url'] = $url;
+        } elseif ($mode === 'relation') {
+            // Relation mode: build URL for fetching options from related model
+            $relationship = (string) ($cfg['relationship'] ?? '');
+            $related = null;
+            if ($modelInstance instanceof Model && $relationship !== '') {
+                $related = $this->resolveRelatedModel($modelInstance, $relationship);
+            }
+            $relatedName = $related ? class_basename($related) : null;
+            if (! $relatedName) {
+                if ($relationship !== '') {
+                    $relatedName = Str::studly($relationship);
+                } elseif ($dotToken !== null && Str::contains($dotToken, '.')) {
+                    $relatedName = Str::studly(Str::before($dotToken, '.'));
+                } else {
+                    $base = $key;
+                    if (Str::endsWith($base, '_id')) {
+                        $base = Str::beforeLast($base, '_id');
+                    }
+                    $relatedName = Str::studly($base);
+                }
+            }
+            $prefix = config('uiapi.route_prefix', 'api');
+            $columnsParam = $itemValue.','.$itemTitle;
+            $sortParam = $itemTitle;
+            $out['url'] = url('/'.$prefix.'/gapi/'.$relatedName).'?columns='.$columnsParam.'&sort='.$sortParam.'&pagination=off&wrap=data';
         } else {
-            // Relation mode: build URL for fetching options
+            // Fallback to relation mode for backward compatibility
             $relationship = (string) ($cfg['relationship'] ?? '');
             $related = null;
             if ($modelInstance instanceof Model && $relationship !== '') {
@@ -1555,6 +1593,7 @@ class ComponentConfigService
                 $filter['itemValue'] = $itemValue;
 
                 if ($mode === 'self') {
+                    // Self mode: use items array directly from config
                     $items = $source['items'] ?? [];
                     $pruned = [];
                     if (is_array($items)) {
@@ -1573,7 +1612,45 @@ class ComponentConfigService
                         }
                     }
                     $filter['items'] = $pruned;
+                } elseif ($mode === 'url') {
+                    // URL mode: use the URL exactly as defined in config
+                    $url = $source['url'] ?? null;
+
+                    if (! $url || ! is_string($url) || trim($url) === '') {
+                        throw new \InvalidArgumentException(
+                            "Filter mode 'url' requires a valid 'url' key for field '{$key}'"
+                        );
+                    }
+
+                    // Use URL as-is without modification
+                    $filter['url'] = $url;
+                } elseif ($mode === 'relation') {
+                    // Relation mode: build URL for fetching options from related model
+                    $relationship = (string) ($source['relationship'] ?? '');
+                    if ($modelInstance instanceof Model && $relationship !== '') {
+                        $related = $this->resolveRelatedModel($modelInstance, $relationship);
+                        if ($related) {
+                            $prefix = config('uiapi.route_prefix', 'api');
+                            $base = url('/'.$prefix.'/'.class_basename($related));
+                            $queryStr = "columns={$itemValue},{$itemTitle}&sort={$itemTitle}&pagination=off&wrap=data";
+                            $filter['url'] = $base.'?'.$queryStr;
+                        }
+                    } else {
+                        $relatedModelName = $relationship !== '' ? Str::studly($relationship) : null;
+                        if (! $relatedModelName) {
+                            $base = $key;
+                            if (Str::endsWith($base, '_id')) {
+                                $base = Str::beforeLast($base, '_id');
+                            }
+                            $relatedModelName = Str::studly($base);
+                        }
+                        $columnsParamStr = $itemValue.','.$itemTitle;
+                        $sortParam = $itemTitle;
+                        $prefix = config('uiapi.route_prefix', 'api');
+                        $filter['url'] = url("/{$prefix}/gapi/{$relatedModelName}").'?columns='.$columnsParamStr.'&sort='.$sortParam.'&pagination=off&wrap=data';
+                    }
                 } else {
+                    // Fallback to relation mode for backward compatibility
                     $relationship = (string) ($source['relationship'] ?? '');
                     if ($modelInstance instanceof Model && $relationship !== '') {
                         $related = $this->resolveRelatedModel($modelInstance, $relationship);
