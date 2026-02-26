@@ -553,6 +553,11 @@ class ComponentConfigService
             }
         }
 
+        // If not found, try case-insensitive file system search
+        if (! $fqcn) {
+            $fqcn = $this->findModelByCaseInsensitiveSearch($modelName);
+        }
+
         if (! $fqcn) {
             return null;
         }
@@ -563,6 +568,55 @@ class ComponentConfigService
         }
 
         return [$fqcn, $instance, $instance->apiSchema()];
+    }
+
+    /**
+     * Find model class by case-insensitive file system search
+     * Gets all models in the system, lowercases them, then checks for a match
+     */
+    protected function findModelByCaseInsensitiveSearch(string $modelName): ?string
+    {
+        $lowerModelName = strtolower($modelName);
+        $allModels = [];
+
+        // Collect all models from App\Models
+        $appModelsPath = base_path('app/Models');
+        if (is_dir($appModelsPath)) {
+            $files = scandir($appModelsPath);
+            foreach ($files as $file) {
+                if ($file === '.' || $file === '..' || pathinfo($file, PATHINFO_EXTENSION) !== 'php') {
+                    continue;
+                }
+                $className = pathinfo($file, PATHINFO_FILENAME);
+                $allModels[strtolower($className)] = 'App\\Models\\'.$className;
+            }
+        }
+
+        // Collect all models from Ogp\UiApi\Models (package) - only if not already in App\Models
+        $packageModelsPath = base_path('vendor/ogp/uiapi/src/Models');
+        if (is_dir($packageModelsPath)) {
+            $files = scandir($packageModelsPath);
+            foreach ($files as $file) {
+                if ($file === '.' || $file === '..' || pathinfo($file, PATHINFO_EXTENSION) !== 'php') {
+                    continue;
+                }
+                $className = pathinfo($file, PATHINFO_FILENAME);
+                $lowerKey = strtolower($className);
+                // App\Models takes precedence
+                if (! isset($allModels[$lowerKey])) {
+                    $allModels[$lowerKey] = 'Ogp\\UiApi\\Models\\'.$className;
+                }
+            }
+        }
+        // Now check for match
+        if (isset($allModels[$lowerModelName])) {
+            $fqcn = $allModels[$lowerModelName];
+            if (class_exists($fqcn)) {
+                return $fqcn;
+            }
+        }
+
+        return null;
     }
 
     // ──────────────────────────────────────────────
@@ -693,6 +747,13 @@ class ComponentConfigService
         $viewParam = $request->query('view');
         $componentParam = $request->query('component');
 
+        // Check if component parameter actually refers to a view (contains "View")
+        // Allow ?component=listView to work the same as ?view=listView
+        if ($componentParam && ! $viewParam && str_contains($componentParam, 'View')) {
+            $viewParam = $componentParam;
+            $componentParam = null;
+        }
+
         // Handle view request - return componentSettings only
         if ($viewParam && ! $componentParam) {
             return $this->handleViewRequest($request, $modelName, $viewParam);
@@ -810,14 +871,20 @@ class ComponentConfigService
             );
 
             // Apply view config overrides (e.g., buttons: ["search", "clear"] filters the full button definitions)
-            if (is_array($compBlock) && !empty($compBlock)) {
+            if (is_array($compBlock) && ! empty($compBlock)) {
                 $componentPayload = $this->applyOverridesToSection($componentPayload, $compBlock, $lang);
             }
 
             // Collapse localized keys (e.g., {en, dv} → single lang value)
             $componentPayload = $this->collapseLocalizedKeys($componentPayload, $lang);
 
-            return response()->json($componentPayload);
+            // Build response with component key and validation warnings
+            $response = array_merge(['component' => $componentKey], $componentPayload);
+            if ($validationWarnings !== null) {
+                $response['_validation_warnings'] = $validationWarnings;
+            }
+
+            return response()->json($response);
         }
 
         // Build component settings
@@ -1384,11 +1451,11 @@ class ComponentConfigService
                 if ($val === 'on') {
                     // Merge columnCustomizations into columnsSchema for filters
                     $effectiveSchema = $columnsSchema;
-                    if (is_array($columnCustomizations) && !empty($columnCustomizations)) {
+                    if (is_array($columnCustomizations) && ! empty($columnCustomizations)) {
                         foreach ($columnCustomizations as $colKey => $customization) {
                             if (isset($effectiveSchema[$colKey]) && is_array($effectiveSchema[$colKey])) {
                                 $effectiveSchema[$colKey] = array_merge($effectiveSchema[$colKey], $customization);
-                            } elseif (!isset($effectiveSchema[$colKey])) {
+                            } elseif (! isset($effectiveSchema[$colKey])) {
                                 $effectiveSchema[$colKey] = $customization;
                             }
                         }
@@ -1648,11 +1715,11 @@ class ComponentConfigService
                 $itemTitleKey = null;
                 $itemValueKey = $source['itemValue'] ?? 'itemValue';
 
-                if ($rawItemTitle === null && is_array($source['items'] ?? null) && !empty($source['items'])) {
+                if ($rawItemTitle === null && is_array($source['items'] ?? null) && ! empty($source['items'])) {
                     // Check first item for language-specific keys
                     $firstItem = reset($source['items']);
                     if (is_array($firstItem)) {
-                        $langKey = 'itemTitle' . ucfirst($lang);
+                        $langKey = 'itemTitle'.ucfirst($lang);
                         if (array_key_exists($langKey, $firstItem)) {
                             $itemTitleKey = $langKey;
                         } elseif (array_key_exists('itemTitleEn', $firstItem)) {
@@ -1976,6 +2043,22 @@ class ComponentConfigService
             }
         }
 
+        // Run view config validation at debug_level 2+
+        $validationWarnings = null;
+        if ($this->debugLevel >= 2) {
+            $validator = new ViewConfigValidator;
+            $validationResults = $validator->validate($viewCfg, $modelName);
+            if ($validator->hasErrors()) {
+                return response()->json([
+                    'error' => 'View config validation failed',
+                    'validation' => $validationResults,
+                ], 422);
+            }
+            if ($validator->hasWarnings()) {
+                $validationWarnings = $validationResults['warnings'];
+            }
+        }
+
         $viewBlock = $viewCfg[$viewKey] ?? [];
         $components = $viewBlock['components'] ?? null;
 
@@ -1983,10 +2066,17 @@ class ComponentConfigService
             return response()->json(['error' => "View '{$viewKey}' does not have a valid 'components' configuration"], 422);
         }
 
-        // Return only componentSettings
-        return response()->json([
+        // Build response with component key and validation warnings
+        $response = [
+            'component' => $viewKey,
             'componentSettings' => $components,
-        ]);
+        ];
+
+        if ($validationWarnings !== null) {
+            $response['_validation_warnings'] = $validationWarnings;
+        }
+
+        return response()->json($response);
     }
 
     /**
@@ -2021,9 +2111,21 @@ class ComponentConfigService
         if (empty($viewCfg)) {
             throw new \InvalidArgumentException("View config file missing for model '{$targetModel}'");
         }
-        if (! array_key_exists($targetComponent, $viewCfg)) {
+
+        // Case-insensitive lookup for component key
+        $actualComponentKey = null;
+        foreach (array_keys($viewCfg) as $key) {
+            if (strcasecmp($key, $targetComponent) === 0) {
+                $actualComponentKey = $key;
+                break;
+            }
+        }
+
+        if ($actualComponentKey === null) {
             throw new \InvalidArgumentException("Component key '{$targetComponent}' not found in view config for model '{$targetModel}'");
         }
+
+        $targetComponent = $actualComponentKey;
         $compBlock = $viewCfg[$targetComponent] ?? [];
 
         // Inherit lang from view context if component doesn't have it

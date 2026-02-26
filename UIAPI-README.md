@@ -35,8 +35,14 @@ By default routes are registered under `/{prefix}` where `prefix = config('uiapi
     - Optional: `lang` — defaults to `dv` if omitted (supports `en`, `dv` where applicable)
   - GET `/{prefix}/ccs/{model}?component={componentKey}` → returns full payload for a specific component
     - Required: `component` parameter (e.g., `component=table`)
+    - Also accepts views: `component=listView` works the same as `view=listView`
     - Optional: `lang` — defaults to `dv` if omitted
     - Supports cross-model references: `component=person/form` to fetch form component from person model
+    - Case-insensitive: `component=Table`, `component=table`, or `component=TABLE` all work
+  - GET `/{prefix}/ccs/{model}/{component}` → alternative path-based format for components
+    - Example: `/api/ccs/cform/table` (equivalent to `?component=table`)
+    - Case-insensitive: `/api/ccs/cform/Table` or `/api/ccs/CForm/TABLE` work
+    - Also works for views: `/api/ccs/cform/listView`
 
 - Generic API CRUD (GAPI)
   - GET `/{prefix}/gapi/{model}` → list/index
@@ -194,8 +200,16 @@ Component configuration templates live in the package at `src/Services/Component
 # Fetch view with all component settings
 curl "http://localhost/api/ccs/cform?view=listView&lang=en"
 
-# Fetch specific component payload
+# Fetch specific component payload (query parameter format)
 curl "http://localhost/api/ccs/cform?component=table&lang=en"
+
+# Fetch specific component payload (path format) - case insensitive
+curl "http://localhost/api/ccs/cform/table&lang=en"
+curl "http://localhost/api/ccs/CForm/Table&lang=dv"
+
+# component parameter also works for views
+curl "http://localhost/api/ccs/cform?component=listView&lang=en"
+curl "http://localhost/api/ccs/cform/listView&lang=en"
 
 # Fetch cross-model component
 curl "http://localhost/api/ccs/cform?component=person/form&lang=dv"

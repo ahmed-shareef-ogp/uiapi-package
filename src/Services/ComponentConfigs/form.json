@@ -3,6 +3,7 @@
     "fields": "on",
     "rules": "on",
     "createLink": "off",
+    "crudLink": "on",
     "numberOfColumns": 3,
     "button": ["create", "edit"]
   }
