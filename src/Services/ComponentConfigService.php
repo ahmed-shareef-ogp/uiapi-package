@@ -1255,6 +1255,14 @@ class ComponentConfigService
         return 'gapi/'.$modelName;
     }
 
+    /**
+     * Build update link (relative) for PUT/PATCH update endpoint.
+     */
+    protected function buildUpdateLink(string $modelName): string
+    {
+        return 'gapi/'.$modelName;
+    }
+
     // ──────────────────────────────────────────────
     //  Form fields
     // ──────────────────────────────────────────────
@@ -1434,6 +1442,15 @@ class ComponentConfigService
                     $out['createLink'] = $this->buildCreateLink($modelName);
                 } elseif ($val !== 'off') {
                     $out['createLink'] = $val;
+                }
+
+                continue;
+            }
+            if ($key === 'updateLink') {
+                if ($val === 'on') {
+                    $out['updateLink'] = $this->buildUpdateLink($modelName);
+                } elseif ($val !== 'off') {
+                    $out['updateLink'] = $val;
                 }
 
                 continue;
@@ -1780,7 +1797,7 @@ class ComponentConfigService
                         if ($related) {
                             $prefix = config('uiapi.route_prefix', 'api');
                             $base = url('/'.$prefix.'/'.class_basename($related));
-                            $queryStr = "columns={$itemValue},{$itemTitle}&sort={$itemTitle}&pagination=off&wrap=data";
+                            $queryStr = "columns={$itemValueKey},{$itemTitleKey}&sort={$itemTitleKey}&pagination=off&wrap=data";
                             $filter['url'] = $base.'?'.$queryStr;
                         }
                     } else {
@@ -1792,8 +1809,8 @@ class ComponentConfigService
                             }
                             $relatedModelName = Str::studly($base);
                         }
-                        $columnsParamStr = $itemValue.','.$itemTitle;
-                        $sortParam = $itemTitle;
+                        $columnsParamStr = $itemValueKey.','.$itemTitleKey;
+                        $sortParam = $itemTitleKey;
                         $prefix = config('uiapi.route_prefix', 'api');
                         $filter['url'] = url("/{$prefix}/gapi/{$relatedModelName}").'?columns='.$columnsParamStr.'&sort='.$sortParam.'&pagination=off&wrap=data';
                     }
@@ -1805,7 +1822,7 @@ class ComponentConfigService
                         if ($related) {
                             $prefix = config('uiapi.route_prefix', 'api');
                             $base = url('/'.$prefix.'/'.class_basename($related));
-                            $queryStr = "columns={$itemValue},{$itemTitle}&sort={$itemTitle}&pagination=off&wrap=data";
+                            $queryStr = "columns={$itemValueKey},{$itemTitleKey}&sort={$itemTitleKey}&pagination=off&wrap=data";
                             $filter['url'] = $base.'?'.$queryStr;
                         }
                     } else {
@@ -1817,8 +1834,8 @@ class ComponentConfigService
                             }
                             $relatedModelName = Str::studly($base);
                         }
-                        $columnsParamStr = $itemValue.','.$itemTitle;
-                        $sortParam = $itemTitle;
+                        $columnsParamStr = $itemValueKey.','.$itemTitleKey;
+                        $sortParam = $itemTitleKey;
                         $prefix = config('uiapi.route_prefix', 'api');
                         $filter['url'] = url("/{$prefix}/gapi/{$relatedModelName}").'?columns='.$columnsParamStr.'&sort='.$sortParam.'&pagination=off&wrap=data';
                     }

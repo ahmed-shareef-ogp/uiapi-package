@@ -1,4 +1,5 @@
 <?php
+
 namespace Ogp\UiApi\Http\Controllers;
 
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -54,15 +55,15 @@ class GenericApiController extends BaseController
                 'en' => 'Validation failed.',
             ],
             'created' => [
-                'dv' => "ރެކޯޑު ހަދާ، ސޭވްވެސް ކުރެވިއްޖެ!",
+                'dv' => 'ރެކޯޑު ހަދާ، ސޭވްވެސް ކުރެވިއްޖެ!',
                 'en' => "{$modelBaseName} created successfully.",
             ],
             'updated' => [
-                'dv' => "ރެކޯޑު އަޕްޑޭޓް ކުރެވިއްޖެ!",
+                'dv' => 'ރެކޯޑު އަޕްޑޭޓް ކުރެވިއްޖެ!',
                 'en' => "{$modelBaseName} updated successfully.",
             ],
             'deleted' => [
-                'dv' => "ރެކޯޑު ފުހެލެވިއްޖެ!",
+                'dv' => 'ރެކޯޑު ފުހެލެވިއްޖެ!',
                 'en' => "{$modelBaseName} deleted successfully.",
             ],
             'unable_save' => [
@@ -83,7 +84,7 @@ class GenericApiController extends BaseController
     public function index(Request $request, string $model)
     {
         $requestParams = array_change_key_case($request->all(), CASE_LOWER);
-        $modelClass    = $this->resolveModelClass($model);
+        $modelClass = $this->resolveModelClass($model);
         if (! $modelClass) {
             $catalog = $this->messageCatalog('Resource');
 
@@ -103,7 +104,7 @@ class GenericApiController extends BaseController
             ->sort($requestParams['sort'] ?? null);
 
         $perPage = isset($requestParams['per_page']) ? (int) $requestParams['per_page'] : null;
-        $page    = isset($requestParams['page']) ? (int) $requestParams['page'] : null;
+        $page = isset($requestParams['page']) ? (int) $requestParams['page'] : null;
         $records = $modelClass::paginateFromRequest(
             $query,
             $requestParams['pagination'] ?? null,
@@ -115,16 +116,16 @@ class GenericApiController extends BaseController
             // Build list of auto-added foreign keys (belongsTo) to hide from JSON output
             $autoHidden = [];
             // Also hide auto-included computed attribute dependencies
-            $columnsParam  = $requestParams['columns'] ?? null;
+            $columnsParam = $requestParams['columns'] ?? null;
             $requestedCols = is_string($columnsParam) && $columnsParam !== ''
-                ? array_values(array_filter(array_map('trim', explode(',', $columnsParam)), fn($c) => $c !== ''))
+                ? array_values(array_filter(array_map('trim', explode(',', $columnsParam)), fn ($c) => $c !== ''))
                 : [];
             if (isset($requestParams['with']) && is_string($requestParams['with'])) {
                 try {
                     $modelInstance = new $modelClass;
                     foreach (explode(',', $requestParams['with']) as $spec) {
                         [$path] = array_pad(explode(':', $spec, 2), 2, null);
-                        $path   = is_string($path) ? trim($path) : '';
+                        $path = is_string($path) ? trim($path) : '';
                         if ($path === '') {
                             continue;
                         }
@@ -172,7 +173,7 @@ class GenericApiController extends BaseController
             }
 
             $effectivePerPage = $perPage ?? $records->perPage();
-            $lastPage         = (int) max(1, (int) ceil(($total > 0 ? $total : 1) / max(1, (int) $effectivePerPage)));
+            $lastPage = (int) max(1, (int) ceil(($total > 0 ? $total : 1) / max(1, (int) $effectivePerPage)));
 
             // Hide auto-included foreign keys from serialized output
             $items = array_map(function ($m) use ($autoHidden) {
@@ -190,10 +191,10 @@ class GenericApiController extends BaseController
             if (! empty($items)) {
                 $response['pagination'] = [
                     'current_page' => $records->currentPage(),
-                    'first_page'   => 1,
-                    'last_page'    => $lastPage,
-                    'per_page'     => $effectivePerPage,
-                    'total'        => $total,
+                    'first_page' => 1,
+                    'last_page' => $lastPage,
+                    'per_page' => $effectivePerPage,
+                    'total' => $total,
                 ];
             }
 
@@ -201,17 +202,17 @@ class GenericApiController extends BaseController
         }
 
         // Non-paginated response; hide auto-included foreign keys if any
-        $autoHidden    = [];
-        $columnsParam  = $requestParams['columns'] ?? null;
+        $autoHidden = [];
+        $columnsParam = $requestParams['columns'] ?? null;
         $requestedCols = is_string($columnsParam) && $columnsParam !== ''
-            ? array_values(array_filter(array_map('trim', explode(',', $columnsParam)), fn($c) => $c !== ''))
+            ? array_values(array_filter(array_map('trim', explode(',', $columnsParam)), fn ($c) => $c !== ''))
             : [];
         if (isset($requestParams['with']) && is_string($requestParams['with'])) {
             try {
                 $modelInstance = new $modelClass;
                 foreach (explode(',', $requestParams['with']) as $spec) {
                     [$path] = array_pad(explode(':', $spec, 2), 2, null);
-                    $path   = is_string($path) ? trim($path) : '';
+                    $path = is_string($path) ? trim($path) : '';
                     if ($path === '') {
                         continue;
                     }
@@ -268,7 +269,7 @@ class GenericApiController extends BaseController
     public function show(Request $request, string $model, int $id)
     {
         $requestParams = array_change_key_case($request->all(), CASE_LOWER);
-        $modelClass    = $this->resolveModelClass($model);
+        $modelClass = $this->resolveModelClass($model);
         if (! $modelClass) {
             $catalog = $this->messageCatalog('Resource');
 
@@ -290,10 +291,14 @@ class GenericApiController extends BaseController
             $catalog = $this->messageCatalog(class_basename($modelClass));
 
             return response()->json([
-                'message' => $this->localizedMessage($request, $catalog['record_not_found']),
+                'message' => $this->localizedMessage($request, $catalog['record_not_found']).$this->debugSuffix($e),
             ], Response::HTTP_NOT_FOUND);
         } catch (\Exception $e) {
-            return response()->json(['error' => $e->getMessage()], 500);
+            $catalog = $this->messageCatalog(class_basename($modelClass));
+
+            return response()->json([
+                'message' => $this->localizedMessage($request, $catalog['unexpected']).$this->debugSuffix($e),
+            ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -343,7 +348,7 @@ class GenericApiController extends BaseController
 
                 return response()->json([
                     'message' => $this->localizedMessage($request, $catalog['created']),
-                    'data'    => $record,
+                    'data' => $record,
                 ], Response::HTTP_CREATED);
             });
 
@@ -351,20 +356,20 @@ class GenericApiController extends BaseController
             // Validation errors: return model-defined messages
             return response()->json([
                 'message' => $this->localizedMessage($request, $catalog['validation_failed']),
-                'errors'  => $e->errors(),
+                'errors' => $e->errors(),
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
 
         } catch (QueryException $e) {
             // DB constraint / SQL errors
             Log::error('Database error while creating record', [
-                'model'    => $modelClass,
-                'error'    => $e->getMessage(),
-                'sql'      => $e->getSql(),
+                'model' => $modelClass,
+                'error' => $e->getMessage(),
+                'sql' => $e->getSql(),
                 'bindings' => $e->getBindings(),
             ]);
 
             return response()->json([
-                'message' => $this->localizedMessage($request, $catalog['unable_save']),
+                'message' => $this->localizedMessage($request, $catalog['unable_save']).$this->debugSuffix($e),
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
 
         } catch (\Throwable $e) {
@@ -376,7 +381,7 @@ class GenericApiController extends BaseController
             ]);
 
             return response()->json([
-                'message' => $this->localizedMessage($request, $catalog['unexpected']),
+                'message' => $this->localizedMessage($request, $catalog['unexpected']).$this->debugSuffix($e),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
@@ -413,26 +418,26 @@ class GenericApiController extends BaseController
 
                 return response()->json([
                     'message' => $this->localizedMessage($request, $catalog['updated']),
-                    'data'    => $record,
+                    'data' => $record,
                 ], Response::HTTP_OK);
             });
         } catch (\Illuminate\Validation\ValidationException $e) {
             // Validation errors: return model-defined messages
             return response()->json([
                 'message' => $this->localizedMessage($request, $catalog['validation_failed']),
-                'errors'  => $e->errors(),
+                'errors' => $e->errors(),
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (QueryException $e) {
             // DB constraint / SQL errors
             Log::error('Database error while updating record', [
-                'model'    => $modelClass,
-                'error'    => $e->getMessage(),
-                'sql'      => method_exists($e, 'getSql') ? $e->getSql() : null,
+                'model' => $modelClass,
+                'error' => $e->getMessage(),
+                'sql' => method_exists($e, 'getSql') ? $e->getSql() : null,
                 'bindings' => method_exists($e, 'getBindings') ? $e->getBindings() : null,
             ]);
 
             return response()->json([
-                'message' => $this->localizedMessage($request, $catalog['unable_update']),
+                'message' => $this->localizedMessage($request, $catalog['unable_update']).$this->debugSuffix($e),
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (\Throwable $e) {
             // Any other unexpected error
@@ -443,7 +448,7 @@ class GenericApiController extends BaseController
             ]);
 
             return response()->json([
-                'message' => $this->localizedMessage($request, $catalog['unexpected']),
+                'message' => $this->localizedMessage($request, $catalog['unexpected']).$this->debugSuffix($e),
             ], Response::HTTP_INTERNAL_SERVER_ERROR);
         }
     }
@@ -470,9 +475,18 @@ class GenericApiController extends BaseController
             ], Response::HTTP_OK);
         } catch (ModelNotFoundException $e) {
             return response()->json([
-                'message' => $this->localizedMessage($request, $catalog['record_not_found']),
+                'message' => $this->localizedMessage($request, $catalog['record_not_found']).$this->debugSuffix($e),
             ], Response::HTTP_NOT_FOUND);
         }
+    }
+
+    protected function debugSuffix(\Throwable $e): string
+    {
+        if (! config('app.debug')) {
+            return '';
+        }
+
+        return ' '.$e->getMessage();
     }
 
     protected function resolveModelClass(string $model): ?string
@@ -485,12 +499,12 @@ class GenericApiController extends BaseController
         ]));
 
         foreach ($names as $name) {
-            $packageFqcn = 'Ogp\\UiApi\\Models\\' . $name;
-            $appFqcn     = 'App\\Models\\' . $name;
+            $packageFqcn = 'Ogp\\UiApi\\Models\\'.$name;
+            $appFqcn = 'App\\Models\\'.$name;
 
             // Prefer existing files to avoid noisy autoload warnings
-            $packagePath = base_path('vendor/ogp/uiapi/src/Models/' . $name . '.php');
-            $appPath     = base_path('app/Models/' . $name . '.php');
+            $packagePath = base_path('vendor/ogp/uiapi/src/Models/'.$name.'.php');
+            $appPath = base_path('app/Models/'.$name.'.php');
 
             if (file_exists($packagePath) && class_exists($packageFqcn)) {
                 return $packageFqcn;

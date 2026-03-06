@@ -4,6 +4,7 @@
     "rules": "on",
     "createLink": "off",
     "crudLink": "on",
+    "updateLink": "on",
     "numberOfColumns": 3,
     "button": ["create", "edit"]
   }
