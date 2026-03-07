@@ -423,7 +423,7 @@ class ViewConfigValidator
         // Check if any component reference points to "table"
         $hasTableReference = false;
         foreach ($components as $reference) {
-            if (!is_string($reference)) {
+            if (! is_string($reference)) {
                 continue;
             }
 
@@ -439,13 +439,13 @@ class ViewConfigValidator
             }
         }
 
-        if (!$hasTableReference) {
+        if (! $hasTableReference) {
             return;
         }
 
         // View references a table component, so it should have columns defined at root level
         $rootColumns = $compBlock['columns'] ?? null;
-        if (!is_array($rootColumns) || empty($rootColumns)) {
+        if (! is_array($rootColumns) || empty($rootColumns)) {
             $this->addError(
                 "{$prefix}.columns",
                 'columns_required',
@@ -495,12 +495,21 @@ class ViewConfigValidator
     }
 
     /**
-     * RULE 5: "noModel: true" requires "columnsSchema" to be a non-empty object.
+     * RULE 5: "noModel: true" requires "columnsSchema" for components that rely on column data
+     * (table, toolbar, filtersection, or any component whose name contains "view").
      */
     protected function ruleNoModelRequiresColumnsSchema(array $compBlock, string $prefix): void
     {
         $isNoModel = (bool) ($compBlock['noModel'] ?? false);
         if (! $isNoModel) {
+            return;
+        }
+
+        $lowerPrefix = strtolower($prefix);
+        $requiresColumnsSchema = in_array($lowerPrefix, ['table', 'toolbar', 'filtersection'], true)
+            || str_contains($lowerPrefix, 'iew');
+
+        if (! $requiresColumnsSchema) {
             return;
         }
 

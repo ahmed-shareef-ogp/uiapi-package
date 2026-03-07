@@ -31,6 +31,8 @@ class ComponentConfigService
      */
     protected array $internalKeys = [
         'columnCustomizations',
+        'columnsSchema',
+        'noModel',
         'columns',
         'per_page',
         'filters',
@@ -781,7 +783,10 @@ class ComponentConfigService
 
         if ($isNoModel) {
             $columnsSchema = is_array($compBlock['columnsSchema'] ?? null) ? $compBlock['columnsSchema'] : [];
-            if (empty($columnsSchema)) {
+            $effectiveComponentKey = strtolower((string) ($resolvedComp['componentKey'] ?? $componentParam ?? ''));
+            $requiresColumnsSchema = in_array($effectiveComponentKey, ['table', 'toolbar', 'filtersection'], true)
+                || str_contains($effectiveComponentKey, 'iew');
+            if ($requiresColumnsSchema && empty($columnsSchema)) {
                 return response()->json([
                     'error' => 'noModel mode requires columnsSchema in view config',
                 ], 422);

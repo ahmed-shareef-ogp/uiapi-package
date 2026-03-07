@@ -9,11 +9,13 @@
             },
             {
                 "type": "Clear",
-                "label": "Clear",
+                "label": "x",
+                "appendIcon": "funnel",
                 "color": "secondary"
             },
             {
                 "type": "Close",
+                "prependIcon": "x-mark",
                 "label": "Close",
                 "color": "gray"
             }
