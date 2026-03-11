@@ -2,9 +2,10 @@
   "form": {
     "fields": "on",
     "rules": "on",
-    "createLink": "off",
     "crudLink": "on",
+    "createLink": "on",
     "updateLink": "on",
+    "showLink": "on",
     "numberOfColumns": 3,
     "button": ["create", "edit"]
   }

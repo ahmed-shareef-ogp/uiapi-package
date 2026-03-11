@@ -1268,6 +1268,14 @@ class ComponentConfigService
         return 'gapi/'.$modelName;
     }
 
+    /**
+     * Build show link (relative) for GET show endpoint.
+     */
+    protected function buildShowLink(string $modelName): string
+    {
+        return 'gapi/'.$modelName;
+    }
+
     // ──────────────────────────────────────────────
     //  Form fields
     // ──────────────────────────────────────────────
@@ -1456,6 +1464,15 @@ class ComponentConfigService
                     $out['updateLink'] = $this->buildUpdateLink($modelName);
                 } elseif ($val !== 'off') {
                     $out['updateLink'] = $val;
+                }
+
+                continue;
+            }
+            if ($key === 'showLink') {
+                if ($val === 'on') {
+                    $out['showLink'] = $this->buildShowLink($modelName);
+                } elseif ($val !== 'off') {
+                    $out['showLink'] = $val;
                 }
 
                 continue;
