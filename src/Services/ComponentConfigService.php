@@ -50,7 +50,7 @@ class ComponentConfigService
         'editTitle',
         'title',
         'label',
-        'align'
+        'align',
     ];
 
     public function __construct()
@@ -2176,6 +2176,17 @@ class ComponentConfigService
             }
         }
 
+        // Propagate noModel from view to component if not explicitly set
+        if (! array_key_exists('noModel', $compBlock)) {
+            $viewNoModel = $this->findNoModelFromViews($viewCfg, $targetModel, $targetComponent);
+            if ($viewNoModel !== null) {
+                $compBlock['noModel'] = $viewNoModel;
+            }
+        }
+
+        // Resolve columnsSchema from root-level if component uses a reference or has none
+        $compBlock = $this->resolveColumnsSchemaFromRootConfig($compBlock, $viewCfg);
+
         if (! $columnsParam) {
             $compColumns = $this->getColumnsForComponent($compBlock, 'table');
             if (is_array($compColumns) && ! empty($compColumns)) {
@@ -2192,6 +2203,103 @@ class ComponentConfigService
             'columnsParam' => (string) $columnsParam,
             'targetModel' => (string) $targetModel,
         ];
+    }
+
+    /**
+     * Resolve columnsSchema for a component block from root-level viewConfig.
+     *
+     * Supports:
+     * - Inline columnsSchema (array of column defs) → used as-is (backward compat)
+     * - Integer/string reference → looks up numbered entry in root-level columnsSchema
+     * - Missing columnsSchema → falls back to root-level (single flat schema or first numbered entry)
+     */
+    protected function resolveColumnsSchemaFromRootConfig(array $compBlock, array $viewCfg): array
+    {
+        $localSchema = $compBlock['columnsSchema'] ?? null;
+
+        // If component has an inline array of column definitions, use it as-is
+        if (is_array($localSchema) && ! empty($localSchema)) {
+            return $compBlock;
+        }
+
+        $rootSchema = $viewCfg['columnsSchema'] ?? null;
+        if (! is_array($rootSchema) || empty($rootSchema)) {
+            return $compBlock;
+        }
+
+        // Determine if root schema is flat (single schema) or numbered (multiple schemas)
+        $isNumbered = $this->isNumberedColumnsSchema($rootSchema);
+
+        // If component references a specific schema by number
+        if ($localSchema !== null && (is_int($localSchema) || (is_string($localSchema) && ctype_digit($localSchema)))) {
+            $key = (string) $localSchema;
+            if ($isNumbered && array_key_exists($key, $rootSchema)) {
+                $compBlock['columnsSchema'] = $rootSchema[$key];
+            }
+
+            return $compBlock;
+        }
+
+        // No local schema — fallback to root
+        if ($isNumbered) {
+            // Pick the first numbered entry
+            $compBlock['columnsSchema'] = reset($rootSchema);
+        } else {
+            // Single flat schema at root
+            $compBlock['columnsSchema'] = $rootSchema;
+        }
+
+        return $compBlock;
+    }
+
+    /**
+     * Check if a root-level columnsSchema is a numbered map (keys are numeric strings)
+     * vs a flat single schema (keys are column names like "id", "ref_num").
+     */
+    protected function isNumberedColumnsSchema(array $schema): bool
+    {
+        foreach (array_keys($schema) as $key) {
+            if (! ctype_digit((string) $key)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Find noModel setting from views that reference this component.
+     */
+    protected function findNoModelFromViews(array $viewCfg, string $targetModel, string $targetComponent): ?bool
+    {
+        foreach ($viewCfg as $key => $block) {
+            if (! str_contains($key, 'View') || ! is_array($block)) {
+                continue;
+            }
+
+            $components = $block['components'] ?? null;
+            if (! is_array($components)) {
+                continue;
+            }
+
+            foreach ($components as $reference) {
+                $refTarget = $reference;
+                if (str_contains($reference, '/')) {
+                    [$refModel, $refComponent] = explode('/', $reference, 2);
+                    if (strtolower($refModel) === strtolower($targetModel) && $refComponent === $targetComponent) {
+                        $refTarget = $targetComponent;
+                    } else {
+                        continue;
+                    }
+                }
+
+                if ($refTarget === $targetComponent && array_key_exists('noModel', $block)) {
+                    return (bool) $block['noModel'];
+                }
+            }
+        }
+
+        return null;
     }
 
     /**

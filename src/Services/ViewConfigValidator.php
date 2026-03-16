@@ -21,6 +21,11 @@ class ViewConfigValidator
     ];
 
     /**
+     * The full view config, stored for root-level columnsSchema resolution.
+     */
+    protected array $fullViewConfig = [];
+
+    /**
      * Validation results.
      *
      * @var array{errors: array<int, array{path: string, rule: string, message: string}>, warnings: array<int, array{path: string, rule: string, message: string}>}
@@ -46,6 +51,7 @@ class ViewConfigValidator
     {
         $this->results = ['errors' => [], 'warnings' => []];
         $this->columnsSchema = null;
+        $this->fullViewConfig = $viewConfig;
 
         if (empty($viewConfig)) {
             $this->addError('(root)', 'not_empty', "View config for '{$modelName}' is empty.");
@@ -64,17 +70,25 @@ class ViewConfigValidator
 
             if (str_contains($key, 'View')) {
                 $views[$key] = $block;
+            } elseif ($key === 'columnsSchema') {
+                // Root-level columnsSchema — skip, not a component
+                continue;
             } else {
                 $components[$key] = $block;
             }
         }
 
-        // Enrich components with lang from views (for validation purposes)
+        // Enrich components with lang and noModel from views (for validation purposes)
         $enrichedComponents = $this->enrichComponentsWithViewContext($components, $views);
+
+        // Validate root-level columnsSchema if present
+        $this->ruleRootColumnsSchemaValid($viewConfig);
 
         // Validate component definitions (root keys) with enriched data
         foreach ($enrichedComponents as $componentKey => $compBlock) {
             $prefix = $componentKey;
+            // Resolve columnsSchema from root-level config for noModel components
+            $compBlock = $this->resolveColumnsSchemaFromRootConfig($compBlock);
             $this->resolveColumnsSchemaForBlock($compBlock, $modelName);
             $this->validateCompBlock($compBlock, $prefix, $modelName);
         }
@@ -88,19 +102,13 @@ class ViewConfigValidator
     }
 
     /**
-     * Enrich components with context from views (e.g., lang)
+     * Enrich components with context from views (e.g., lang, noModel)
      */
     protected function enrichComponentsWithViewContext(array $components, array $views): array
     {
         $enriched = $components;
 
-        // Find lang from first view that references each component
         foreach ($enriched as $componentKey => &$compBlock) {
-            // Skip if component already has lang
-            if (isset($compBlock['lang']) && is_array($compBlock['lang']) && ! empty($compBlock['lang'])) {
-                continue;
-            }
-
             // Look for a view that references this component
             foreach ($views as $viewBlock) {
                 $viewComponents = $viewBlock['components'] ?? null;
@@ -117,11 +125,22 @@ class ViewConfigValidator
                         [, $refComponent] = explode('/', $reference, 2);
                     }
 
-                    // If this view references our component and has lang, inherit it
-                    if ($refComponent === $componentKey && isset($viewBlock['lang']) && is_array($viewBlock['lang'])) {
-                        $compBlock['lang'] = $viewBlock['lang'];
-                        break 2; // Found lang, move to next component
+                    if ($refComponent !== $componentKey) {
+                        continue;
                     }
+
+                    // Inherit lang if component doesn't have it
+                    if ((! isset($compBlock['lang']) || ! is_array($compBlock['lang']) || empty($compBlock['lang']))
+                        && isset($viewBlock['lang']) && is_array($viewBlock['lang'])) {
+                        $compBlock['lang'] = $viewBlock['lang'];
+                    }
+
+                    // Propagate noModel if component doesn't explicitly set it
+                    if (! array_key_exists('noModel', $compBlock) && array_key_exists('noModel', $viewBlock)) {
+                        $compBlock['noModel'] = (bool) $viewBlock['noModel'];
+                    }
+
+                    break 2;
                 }
             }
         }
@@ -214,13 +233,70 @@ class ViewConfigValidator
         $isNoModel = (bool) ($compBlock['noModel'] ?? false);
 
         if ($isNoModel) {
-            $this->columnsSchema = is_array($compBlock['columnsSchema'] ?? null) ? $compBlock['columnsSchema'] : null;
+            $schema = $compBlock['columnsSchema'] ?? null;
+            $this->columnsSchema = is_array($schema) ? $schema : null;
 
             return;
         }
 
         // Try to resolve model and get its apiSchema columns
         $this->columnsSchema = $this->resolveModelColumnsSchema($modelName);
+    }
+
+    /**
+     * Resolve columnsSchema from root-level viewConfig for a component block.
+     *
+     * Same logic as ComponentConfigService::resolveColumnsSchemaFromRootConfig().
+     */
+    protected function resolveColumnsSchemaFromRootConfig(array $compBlock): array
+    {
+        $localSchema = $compBlock['columnsSchema'] ?? null;
+
+        // If component has an inline array of column definitions, use it as-is
+        if (is_array($localSchema) && ! empty($localSchema)) {
+            return $compBlock;
+        }
+
+        $rootSchema = $this->fullViewConfig['columnsSchema'] ?? null;
+        if (! is_array($rootSchema) || empty($rootSchema)) {
+            return $compBlock;
+        }
+
+        $isNumbered = $this->isNumberedColumnsSchema($rootSchema);
+
+        // If component references a specific schema by number
+        if ($localSchema !== null && (is_int($localSchema) || (is_string($localSchema) && ctype_digit($localSchema)))) {
+            $key = (string) $localSchema;
+            if ($isNumbered && array_key_exists($key, $rootSchema)) {
+                $compBlock['columnsSchema'] = $rootSchema[$key];
+            }
+
+            return $compBlock;
+        }
+
+        // No local schema — fallback to root
+        if ($isNumbered) {
+            $compBlock['columnsSchema'] = reset($rootSchema);
+        } else {
+            $compBlock['columnsSchema'] = $rootSchema;
+        }
+
+        return $compBlock;
+    }
+
+    /**
+     * Check if a root-level columnsSchema is a numbered map (keys are numeric strings)
+     * vs a flat single schema (keys are column names).
+     */
+    protected function isNumberedColumnsSchema(array $schema): bool
+    {
+        foreach (array_keys($schema) as $key) {
+            if (! ctype_digit((string) $key)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -495,8 +571,46 @@ class ViewConfigValidator
     }
 
     /**
+     * Validate the structure of a root-level columnsSchema if present.
+     * Must be either a flat schema (column names as keys) or a numbered map
+     * (numeric string keys, each value an array of column definitions).
+     */
+    protected function ruleRootColumnsSchemaValid(array $viewConfig): void
+    {
+        $rootSchema = $viewConfig['columnsSchema'] ?? null;
+        if ($rootSchema === null) {
+            return;
+        }
+
+        if (! is_array($rootSchema) || empty($rootSchema)) {
+            $this->addError(
+                'columnsSchema',
+                'root_schema_invalid',
+                'Root-level "columnsSchema" must be a non-empty array.'
+            );
+
+            return;
+        }
+
+        $isNumbered = $this->isNumberedColumnsSchema($rootSchema);
+
+        if ($isNumbered) {
+            foreach ($rootSchema as $key => $entry) {
+                if (! is_array($entry) || empty($entry)) {
+                    $this->addError(
+                        "columnsSchema.{$key}",
+                        'root_schema_entry_invalid',
+                        "Numbered root schema entry \"{$key}\" must be a non-empty array of column definitions."
+                    );
+                }
+            }
+        }
+    }
+
+    /**
      * RULE 5: "noModel: true" requires "columnsSchema" for components that rely on column data
      * (table, toolbar, filtersection, or any component whose name contains "view").
+     * Accepts inline array, an integer reference to root-level schema, or auto-fallback from root.
      */
     protected function ruleNoModelRequiresColumnsSchema(array $compBlock, string $prefix): void
     {
@@ -515,11 +629,12 @@ class ViewConfigValidator
 
         $schema = $compBlock['columnsSchema'] ?? null;
 
+        // After root-level resolution, columnsSchema should be an array if successfully resolved
         if (! is_array($schema) || empty($schema)) {
             $this->addError(
                 "{$prefix}.columnsSchema",
                 'nomodel_requires_schema',
-                '"noModel" is true but "columnsSchema" is missing or empty. A non-empty columnsSchema is required.'
+                '"noModel" is true but "columnsSchema" is missing or empty. Provide an inline schema, a root-level schema, or an integer reference to a numbered root schema.'
             );
         }
     }
