@@ -50,6 +50,7 @@ class ComponentConfigService
         'editTitle',
         'title',
         'label',
+        'align'
     ];
 
     public function __construct()
