@@ -51,6 +51,8 @@ class ComponentConfigService
         'title',
         'label',
         'align',
+        'emptyText',
+        'labelKey',
     ];
 
     public function __construct()
@@ -876,6 +878,13 @@ class ComponentConfigService
                 $allowedFilters
             );
 
+            // Enrich card stacks from columnsSchema before overrides are applied,
+            // so processLangInPayload inside applyOverridesToSection can use
+            // inherited lang values for filtering and then strip them.
+            if ($componentKey === 'card' && is_array($compBlock) && isset($compBlock['cardLayout']) && is_array($compBlock['cardLayout'])) {
+                $compBlock['cardLayout'] = $this->enrichCardLayoutFromSchema($compBlock['cardLayout'], $columnsSchema);
+            }
+
             // Apply view config overrides (e.g., buttons: ["search", "clear"] filters the full button definitions)
             if (is_array($compBlock) && ! empty($compBlock)) {
                 $componentPayload = $this->applyOverridesToSection($componentPayload, $compBlock, $lang);
@@ -1446,7 +1455,14 @@ class ComponentConfigService
                 if ($val === 'on') {
                     $out['fields'] = $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang, $modelInstance);
                 } elseif ($val !== 'off') {
-                    $out['fields'] = $val;
+                    if (is_array($val)) {
+                        if (array_is_list($val)) {
+                            $val = $this->filterListByLang($val, $lang);
+                        }
+                        $out['fields'] = $this->buildSectionPayload($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $modelInstance, $columnCustomizations, $allowedFilters);
+                    } else {
+                        $out['fields'] = $val;
+                    }
                 }
 
                 continue;
@@ -1549,6 +1565,9 @@ class ComponentConfigService
                 continue;
             }
             if (is_array($val)) {
+                if (array_is_list($val)) {
+                    $val = $this->filterListByLang($val, $lang);
+                }
                 $out[$key] = $this->buildSectionPayload($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $modelInstance, $columnCustomizations, $allowedFilters);
             } else {
                 $out[$key] = $val;
@@ -1671,6 +1690,9 @@ class ComponentConfigService
                 if (is_array($componentsOverrides) && array_key_exists($key, $componentsOverrides)) {
                     $override = $componentsOverrides[$key];
                     if (is_array($override)) {
+                        if ($key === 'card' && isset($override['cardLayout']) && is_array($override['cardLayout'])) {
+                            $override['cardLayout'] = $this->enrichCardLayoutFromSchema($override['cardLayout'], $columnsSchema);
+                        }
                         $payload = $this->applyOverridesToSection($payload, $override, $lang);
                     }
                 }
@@ -2745,7 +2767,9 @@ class ComponentConfigService
                 }
                 if (! array_key_exists($targetKey, $sectionPayload)) {
                     if ($this->getAllowCustomComponentKeys()) {
-                        $sectionPayload[$overrideKey] = $overrideVal;
+                        $sectionPayload[$overrideKey] = is_array($overrideVal)
+                            ? $this->processLangInPayload($overrideVal, $lang)
+                            : $overrideVal;
                     }
 
                     continue;
@@ -2771,7 +2795,7 @@ class ComponentConfigService
                 }
                 if (! array_key_exists($targetKey, $sectionPayload)) {
                     if ($this->getAllowCustomComponentKeys()) {
-                        $sectionPayload[$overrideKey] = $overrideVal;
+                        $sectionPayload[$overrideKey] = $this->processLangInPayload($overrideVal, $lang);
                     }
 
                     continue;
@@ -2924,5 +2948,171 @@ class ComponentConfigService
         $normalized = array_values(array_unique(array_map(fn ($l) => strtolower((string) $l), $langs)));
 
         return in_array(strtolower($lang), $normalized, true);
+    }
+
+    /**
+     * Check if a nested config item (stack, field, etc.) supports the given language.
+     * If no lang key is present, the item supports all languages.
+     * Accepts both string ("en") and array (["en", "dv"]) lang values.
+     */
+    protected function itemSupportsLang(array $item, string $lang): bool
+    {
+        $itemLang = $item['lang'] ?? null;
+        if ($itemLang === null) {
+            return true;
+        }
+        if (is_string($itemLang)) {
+            return strtolower($itemLang) === strtolower($lang);
+        }
+        if (is_array($itemLang)) {
+            $normalized = array_map(fn ($l) => strtolower((string) $l), $itemLang);
+
+            return in_array(strtolower($lang), $normalized, true);
+        }
+
+        return true;
+    }
+
+    /**
+     * Filter a list of config items by language support.
+     * Items without a lang key pass through. Only array items are checked.
+     *
+     * @param  array<int, mixed>  $list
+     * @return array<int, mixed>
+     */
+    protected function filterListByLang(array $list, string $lang): array
+    {
+        $filtered = [];
+        foreach ($list as $item) {
+            if (is_array($item) && ! $this->itemSupportsLang($item, $lang)) {
+                continue;
+            }
+            $filtered[] = $item;
+        }
+
+        return $filtered;
+    }
+
+    /**
+     * Recursively process a payload tree for language:
+     * - Strip 'lang' keys from objects
+     * - Filter sequential lists by language support
+     *
+     * Used to process raw view config content added via overrides
+     * that bypasses buildSectionPayload.
+     */
+    protected function processLangInPayload(array $payload, string $lang): array
+    {
+        if (array_is_list($payload)) {
+            $filtered = $this->filterListByLang($payload, $lang);
+
+            return array_values(array_map(
+                fn ($item) => is_array($item) ? $this->processLangInPayload($item, $lang) : $item,
+                $filtered
+            ));
+        }
+
+        $result = [];
+        foreach ($payload as $key => $val) {
+            if ($key === 'lang') {
+                continue;
+            }
+            $result[$key] = is_array($val) ? $this->processLangInPayload($val, $lang) : $val;
+        }
+
+        return $result;
+    }
+
+    // ──────────────────────────────────────────────
+    //  Card: columnsSchema inheritance
+    // ──────────────────────────────────────────────
+
+    /** @var string[] Keys that card stacks can inherit from columnsSchema */
+    protected array $cardInheritableKeys = ['lang', 'label', 'align'];
+
+    /**
+     * Enrich cardLayout stacks with inheritable parameters from columnsSchema.
+     * Top-level stacks look up their key directly.
+     * Nested stacks inside a section prefix the section's key.
+     */
+    protected function enrichCardLayoutFromSchema(array $cardLayout, array $columnsSchema): array
+    {
+        if (! isset($cardLayout['stacks']) || ! is_array($cardLayout['stacks'])) {
+            return $cardLayout;
+        }
+
+        $cardLayout['stacks'] = $this->enrichStacksFromSchema(
+            $cardLayout['stacks'],
+            $columnsSchema,
+            null
+        );
+
+        return $cardLayout;
+    }
+
+    /**
+     * Recursively walk stacks, enriching each item from columnsSchema.
+     *
+     * @param  array<int, mixed>  $stacks
+     */
+    protected function enrichStacksFromSchema(array $stacks, array $columnsSchema, ?string $keyPrefix): array
+    {
+        foreach ($stacks as &$stack) {
+            if (! is_array($stack)) {
+                continue;
+            }
+
+            $this->enrichItemFromSchema($stack, $columnsSchema, $keyPrefix);
+
+            if (isset($stack['fields']) && is_array($stack['fields'])) {
+                foreach ($stack['fields'] as &$field) {
+                    if (is_array($field)) {
+                        $this->enrichItemFromSchema($field, $columnsSchema, $keyPrefix);
+                    }
+                }
+                unset($field);
+            }
+
+            if (isset($stack['stacks']) && is_array($stack['stacks'])) {
+                $sectionKey = $stack['key'] ?? null;
+                $newPrefix = match (true) {
+                    $keyPrefix !== null && $sectionKey !== null => $keyPrefix.'.'.$sectionKey,
+                    default => $sectionKey ?? $keyPrefix,
+                };
+
+                $stack['stacks'] = $this->enrichStacksFromSchema(
+                    $stack['stacks'],
+                    $columnsSchema,
+                    $newPrefix
+                );
+            }
+        }
+        unset($stack);
+
+        return $stacks;
+    }
+
+    /**
+     * Merge inheritable keys from columnsSchema into a single stack/field item.
+     * Stack-local values always win.
+     */
+    protected function enrichItemFromSchema(array &$item, array $columnsSchema, ?string $keyPrefix): void
+    {
+        $key = $item['key'] ?? null;
+        if (! is_string($key) || $key === '') {
+            return;
+        }
+
+        $lookupKey = $keyPrefix !== null ? $keyPrefix.'.'.$key : $key;
+        $schemaDef = $columnsSchema[$lookupKey] ?? null;
+        if (! is_array($schemaDef)) {
+            return;
+        }
+
+        foreach ($this->cardInheritableKeys as $attr) {
+            if (array_key_exists($attr, $schemaDef) && ! array_key_exists($attr, $item)) {
+                $item[$attr] = $schemaDef[$attr];
+            }
+        }
     }
 }
