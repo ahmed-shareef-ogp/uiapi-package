@@ -1887,6 +1887,23 @@ class ComponentConfigService
                 }
             }
 
+            // Forward extra user-defined properties from $def into $filter
+            $consumedKeys = [
+                'lang', 'type', 'inputType', 'label', 'key', 'filterable',
+                'select', 'date', 'text', 'number', 'checkbox',
+                'hidden', 'sortable', 'inlineEditable', 'editable',
+                'displayType', 'displayProps', 'chip', 'width', 'order',
+                'columnData',
+            ];
+            if (is_string($inputType) && $inputType !== '') {
+                $consumedKeys[] = $inputType;
+            }
+            foreach ($def as $dk => $dv) {
+                if (! in_array($dk, $consumedKeys, true) && ! array_key_exists($dk, $filter)) {
+                    $filter[$dk] = $dv;
+                }
+            }
+
             $filters[] = $filter;
         }
 

@@ -55,7 +55,7 @@ class GenericApiController extends BaseController
                 'en' => 'Validation failed.',
             ],
             'created' => [
-                'dv' => 'ރެކޯޑު ހަދާ، ސޭވްވެސް ކުރެވިއްޖެ!',
+                'dv' => 'ރެކޯޑް ސޭވްކުރެވިއްޖެ!',
                 'en' => "{$modelBaseName} created successfully.",
             ],
             'updated' => [
