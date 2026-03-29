@@ -1464,13 +1464,19 @@ class ComponentConfigService
             }
             if ($key === 'fields') {
                 if ($val === 'on') {
-                    $out['fields'] = $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang, $modelInstance);
+                        $out['fields'] = $this->processLangInPayload(
+                            $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang, $modelInstance),
+                            $lang
+                        );
                 } elseif ($val !== 'off') {
                     if (is_array($val)) {
                         if (array_is_list($val)) {
                             $val = $this->filterListByLang($val, $lang);
                         }
-                        $out['fields'] = $this->buildSectionPayload($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $modelInstance, $columnCustomizations, $allowedFilters);
+                            $out['fields'] = $this->processLangInPayload(
+                                $this->buildSectionPayload($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $modelInstance, $columnCustomizations, $allowedFilters),
+                                $lang
+                            );
                     } else {
                         $out['fields'] = $val;
                     }
@@ -2891,7 +2897,7 @@ class ComponentConfigService
                         }
                         $merged[] = $existing ? array_merge($existing, $ov) : $ov;
                     }
-                    $sectionPayload[$targetKey] = $merged;
+                        $sectionPayload[$targetKey] = $this->processLangInPayload($merged, $lang);
 
                     continue;
                 }
@@ -2917,7 +2923,7 @@ class ComponentConfigService
                         $merged[] = $ov;
                     }
                 }
-                $sectionPayload[$targetKey] = $merged;
+                $sectionPayload[$targetKey] = $this->filterListByLang($merged, $lang);
 
                 continue;
             }
