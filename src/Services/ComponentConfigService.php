@@ -1311,6 +1311,10 @@ class ComponentConfigService
                     continue;
                 }
             }
+            // Filter by lang support (same as table columns)
+            if (! $this->columnSupportsLang($def, $lang)) {
+                continue;
+            }
             $key = $this->keyFor($def, $field);
             $label = $this->labelFor($def, $field, $lang);
             $inputType = (string) ($def['inputType'] ?? '');
@@ -1363,10 +1367,17 @@ class ComponentConfigService
                     if (! (is_array($leafDef) && ((bool) ($leafDef['formField'] ?? false) === true))) {
                         continue;
                     }
+                    // Filter by lang support (same as table columns)
+                    if (! $this->columnSupportsLang($leafDef, $lang)) {
+                        continue;
+                    }
                 } else {
                     $leafDef = $columnsSchema[$token] ?? null;
                     if (! is_array($leafDef)) {
                         $leafDef = [];
+                    }
+                    if (! $this->columnSupportsLang($leafDef, $lang)) {
+                        continue;
                     }
                 }
 

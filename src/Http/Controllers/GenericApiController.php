@@ -51,7 +51,7 @@ class GenericApiController extends BaseController
                 'en' => 'Record not found.',
             ],
             'validation_failed' => [
-                'dv' => 'ވެލިޑޭޝަން ފެއިލްއޭވީ. އެހެންވެ ރެކޯޑު ސޭވެއް ނުކުރެވުނު.',
+                'dv' => 'ސޭވް ނުކުރެވުނު - ވެލިޑޭޝަން ފެއިލްވި',
                 'en' => 'Validation failed.',
             ],
             'created' => [
