@@ -25,4 +25,29 @@ Route::prefix(config('uiapi.route_prefix', 'api'))
         Route::post('gapi/{model}', [GenericApiController::class, 'store']);
         Route::put('gapi/{model}/{id}', [GenericApiController::class, 'update']);
         Route::delete('gapi/{model}/{id}', [GenericApiController::class, 'destroy']);
+
+        Route::post('upload', function (Request $request) {
+            // Log all form data
+            \Log::info('Upload form data received:', $request->all());
+            
+            // Log files if any
+            if ($request->hasFile('file')) {
+                \Log::info('Files uploaded:', [
+                    'file_count' => count($request->file('file')),
+                    'files' => collect($request->file('file'))->map(function ($file) {
+                        return [
+                            'name' => $file->getClientOriginalName(),
+                            'size' => $file->getSize(),
+                            'mime_type' => $file->getMimeType()
+                        ];
+                    })->toArray()
+                ]);
+            }
+            
+            return response()->json([
+                'message' => 'Upload data logged successfully',
+                'data_received' => $request->all()
+            ]);
+        });
     });
+

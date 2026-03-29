@@ -370,6 +370,7 @@ class GenericApiController extends BaseController
 
             return response()->json([
                 'message' => $this->localizedMessage($request, $catalog['unable_save']).$this->debugSuffix($e),
+                'errors' => $this->parseQueryExceptionErrors($e),
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
 
         } catch (\Throwable $e) {
@@ -438,6 +439,7 @@ class GenericApiController extends BaseController
 
             return response()->json([
                 'message' => $this->localizedMessage($request, $catalog['unable_update']).$this->debugSuffix($e),
+                'errors' => $this->parseQueryExceptionErrors($e),
             ], Response::HTTP_UNPROCESSABLE_ENTITY);
         } catch (\Throwable $e) {
             // Any other unexpected error
@@ -478,6 +480,72 @@ class GenericApiController extends BaseController
                 'message' => $this->localizedMessage($request, $catalog['record_not_found']).$this->debugSuffix($e),
             ], Response::HTTP_NOT_FOUND);
         }
+    }
+
+    /**
+     * @return array<string, string[]>
+     */
+    protected function parseQueryExceptionErrors(QueryException $e): array
+    {
+        $message = $e->getMessage();
+        $errorCode = $e->errorInfo[1] ?? null;
+
+        // Unique constraint violation (MySQL 1062 / PostgreSQL 23505)
+        if ($errorCode == 1062 || ($e->errorInfo[0] ?? '') === '23505') {
+            if (preg_match("/for key '[^.]*\.?([^']+)'/", $message, $m)) {
+                $index = $m[1];
+                // Try to extract column name from index name (convention: table_column_unique)
+                $parts = explode('_', $index);
+                // Remove 'unique' suffix if present
+                if (end($parts) === 'unique') {
+                    array_pop($parts);
+                }
+                // Remove table name prefix (first part)
+                if (count($parts) > 1) {
+                    array_shift($parts);
+                }
+                $column = implode('_', $parts);
+
+                return [$column => ['The value for ' . $column . ' already exists.']];
+            }
+            // PostgreSQL: extract from detail
+            if (preg_match('/Key \(([^)]+)\)/', $message, $m)) {
+                $column = trim($m[1]);
+
+                return [$column => ['The value for ' . $column . ' already exists.']];
+            }
+
+            return ['database' => ['A duplicate entry was found.']];
+        }
+
+        // Foreign key constraint violation (MySQL 1452 / PostgreSQL 23503)
+        if ($errorCode == 1452 || ($e->errorInfo[0] ?? '') === '23503') {
+            if (preg_match('/FOREIGN KEY \(`?([^`)]+)`?\)/', $message, $m)) {
+                $column = $m[1];
+
+                return [$column => ['The referenced record for ' . $column . ' does not exist.']];
+            }
+
+            return ['database' => ['A referenced record does not exist.']];
+        }
+
+        // Not null violation (MySQL 1048 / PostgreSQL 23502)
+        if ($errorCode == 1048 || ($e->errorInfo[0] ?? '') === '23502') {
+            if (preg_match("/Column '([^']+)'/", $message, $m)) {
+                $column = $m[1];
+
+                return [$column => ['The ' . $column . ' field cannot be empty.']];
+            }
+            if (preg_match('/column "([^"]+)"/', $message, $m)) {
+                $column = $m[1];
+
+                return [$column => ['The ' . $column . ' field cannot be empty.']];
+            }
+
+            return ['database' => ['A required field is missing.']];
+        }
+
+        return ['database' => ['A database error occurred.']];
     }
 
     protected function debugSuffix(\Throwable $e): string
