@@ -314,7 +314,11 @@ Default if omitted: `25`.
 
 #### `actions` (object)
 
-Controls which CRUD action buttons appear for each row.
+Controls which CRUD action buttons appear for each row and under what conditions.
+
+##### Visibility Toggles
+
+Use `showView`, `showEdit`, and `showDelete` to globally enable or disable each action button.
 
 ```json
 "actions": {
@@ -325,6 +329,46 @@ Controls which CRUD action buttons appear for each row.
 ```
 
 Values defined here are **merged** with the template defaults. So to hide the view button, you only need to set `"showView": false` — the others remain as-is.
+
+##### Per-Row Conditions
+
+Use `viewCondition`, `editCondition`, and `deleteCondition` to control action button visibility **per row** based on the row's data. Each condition is a JavaScript expression string that receives the current row as `item`. The button is shown when the expression evaluates to truthy.
+
+| Key | Type | Description |
+|---|---|---|
+| `showView` | `boolean` | Globally show/hide the view button (default: `true`) |
+| `showEdit` | `boolean` | Globally show/hide the edit button (default: `true`) |
+| `showDelete` | `boolean` | Globally show/hide the delete button (default: `true`) |
+| `viewCondition` | `string` | JS expression — view button shown only when truthy |
+| `editCondition` | `string` | JS expression — edit button shown only when truthy |
+| `deleteCondition` | `string` | JS expression — delete button shown only when truthy |
+
+> **How it works:** Both the toggle and the condition must pass for a button to appear. For example, if `showDelete` is `true` but `deleteCondition` evaluates to `false` for a given row, the delete button is hidden for that row. If a condition is not set, it defaults to `true` (always shown, as long as the toggle is enabled).
+
+**Simple condition** — only allow deleting draft records:
+
+```json
+"actions": {
+    "showView": true,
+    "showEdit": true,
+    "showDelete": true,
+    "deleteCondition": "item.status === 'draft'"
+}
+```
+
+**Multiple conditions** — edit only drafts, delete only drafts created by the current user:
+
+```json
+"actions": {
+    "showView": true,
+    "showEdit": true,
+    "showDelete": true,
+    "editCondition": "item.status === 'draft'",
+    "deleteCondition": "item.status === 'draft' && item.created_by === item.current_user_id"
+}
+```
+
+> **Note:** Conditions are evaluated on the frontend using the row's data. Any field available in the row object can be referenced via `item.fieldName`. If the expression throws an error (e.g., referencing a non-existent field), the button defaults to **shown**.
 
 #### `delete` (object)
 
@@ -519,10 +563,15 @@ Each field object requires at minimum a `key`:
         "format": "dd/MM/yyyy"
     },
     {
-        "key": "file_upload",
+        "key": "remarks",
+        "dataKey": "url",
         "label": { "en": "Upload File", "dv": "ފައިލް އަންނަނީ" },
         "inputType": "file",
-        "columnSpan": 3
+        "columnSpan": 3,
+        "accept": "image/*,application/pdf,.doc,.docx",
+        "multiple": true,
+        "maxSizeMB": 200,
+        "uploadUrl": "https://uiapi.pgo.mv/api/upload"
     }
 ]
 ```
@@ -568,7 +617,7 @@ Each field object requires at minimum a `key`:
 | `"select"` | Dropdown select | `mode`, `items`/`url`, `itemTitle`, `itemValue` (see [Select in Forms](#select-in-forms)) |
 | `"search"` | Search-as-you-type field | `submitUrl` (required), `submitMethod`, `submitParam`, `events` |
 | `"label"` | Read-only display — renders the field's value as static text instead of an editable input | — |
-| `"file"` | File upload | — |
+| `"file"` | File upload | `uploadUrl` (required), `accept`, `multiple`, `maxSizeMB`, `uploadOnSelect`, `dataKey`, `params` (see [File Upload Fields](#file-upload-fields)) |
 
 **Auto-detection:** If you omit `inputType`, CCS derives it from the column's `type` in `apiSchema()`:
 
@@ -640,6 +689,63 @@ Search fields (`"inputType": "search"`) allow users to search an external endpoi
 | `submitMethod` | `string` | No | HTTP method (`"get"` or `"post"`). Default: `"get"`. |
 | `submitParam` | `string` | No | Query parameter template. Supports `${language}` interpolation. |
 | `events.results` | `string` | No | Function name to handle the search results. Must be defined in `functions`. |
+
+##### File Upload Fields
+
+File upload fields (`"inputType": "file"`) render a drag-and-drop upload zone with file selection, validation, and server upload. The `uploadUrl` key is required — without it, users can select files but the component has no endpoint to send them to.
+
+**Minimal example:**
+
+```json
+{
+    "key": "remarks",
+    "group": "Documents",
+    "inputType": "file",
+    "uploadUrl": "https://uiapi.pgo.mv/api/upload"
+}
+```
+
+**Full example with all options:**
+
+```json
+{
+    "key": "remarks",
+    "dataKey": "url",
+    "label": { "en": "Upload File", "dv": "ފައިލް އަންނަނީ" },
+    "group": "Documents",
+    "inputType": "file",
+    "columnSpan": 3,
+    "accept": "image/*,application/pdf,.doc,.docx",
+    "multiple": true,
+    "maxSizeMB": 200,
+    "uploadUrl": "https://uiapi.pgo.mv/api/upload",
+    "uploadOnSelect": false,
+    "params": { "model": "CForm", "field": "remarks" }
+}
+```
+
+| Key | Type | Required | Description |
+|---|---|---|---|
+| `key` | `string` | Yes | Database column name this field maps to. |
+| `uploadUrl` | `string` | Yes | The endpoint URL to POST files to. Without this, file selection works but uploading is disabled. |
+| `accept` | `string` | No | Comma-separated list of allowed file types. Supports MIME types (`image/*`, `application/pdf`), MIME subtypes (`image/png`), and extensions (`.doc`, `.docx`). If omitted, all file types are accepted. |
+| `multiple` | `boolean` | No | Allow selecting multiple files. Default: `true`. |
+| `maxSizeMB` | `number` | No | Maximum file size in megabytes. Files exceeding this are rejected client-side with an error message. Default: `2`. |
+| `uploadOnSelect` | `boolean` | No | When `true`, files are uploaded immediately after selection. When `false` (default), a manual "Upload" button is shown below the file list. |
+| `dataKey` | `string` | No | The property name to read existing uploaded files from when the form fetches record data (e.g., in edit mode). If omitted, defaults to the `key` value. |
+| `params` | `string`, `array`, or `object` | No | Extra metadata sent alongside the files in the upload POST request. See below. |
+
+**How `params` works:**
+
+The `params` value is appended to the `FormData` sent to `uploadUrl`. The format depends on the type:
+
+- **String**: sent as a single `params` field — `formData.append('params', value)`
+- **Array**: each item sent as `params[0]`, `params[1]`, etc.
+- **Object** (most common): each key-value pair is sent as a separate form field. For example, `"params": { "model": "CForm", "field": "remarks" }` sends `model=CForm` and `field=remarks` alongside the files. This lets the backend know which model and field the upload belongs to.
+
+> **Note:** The `relationId` (the record's ID when editing) is automatically appended to the upload request by the form — you do not need to include it in `params`.
+
+> **Note:** The component also supports viewing and deleting previously uploaded files. When the form loads record data, it reads the file list from the `dataKey` (or `key`) property of the fetched data. Each file object in that list can include a `url` (for viewing) and a `delete_url` (for deletion).
 
 ##### Functions & Events
 
@@ -1363,6 +1469,7 @@ When both exist, they are **deep-merged** (component-specific wins on conflict).
 | `"image"` | Image display | No |
 | `"badge"` | Badge display | No |
 | `"html"` | Raw HTML rendering | No |
+| `"docButton"` | Document/file viewer button(s) | Yes — `docButton` sub-key |
 
 #### Chip Configuration
 
@@ -1406,6 +1513,56 @@ When `displayType` is `"chip"`, provide a `chip` object where each key is a poss
 | `label` | `{en, dv}` | Display label (auto-resolved to request language) |
 | `color` | `string` | Color token: `"primary"`, `"secondary"`, `"success"`, `"error"`, `"warning"` |
 | `prependIcon` | `string` | Icon name displayed before the label |
+
+#### Document Button Configuration
+
+When `displayType` is `"docButton"`, the column renders clickable document buttons using the `FileDisplay` component. This is used to display file attachments in a table row — each file gets a button that opens a document viewer when clicked.
+
+The column's data is expected to be a JSON string or array of file objects, where each object has a `url` (for viewing) and optionally a `display_name` or `name` (for the tooltip/label).
+
+```json
+"url": {
+    "displayType": "docButton",
+    "docButton": {
+        "displayLabel": false,
+        "columnView": false
+    },
+    "label": {
+        "en": "Files",
+        "dv": "ފައިލް"
+    }
+}
+```
+
+The `docButton` sub-key configures how the buttons are rendered:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `displayLabel` | `boolean` | `true` | Show the file name next to the icon. When `false`, only the document icon is shown (file name appears as a tooltip on hover). |
+| `columnView` | `boolean` | `false` | Layout direction. When `true`, files are stacked vertically (one per line). When `false`, files are displayed inline (side by side). |
+| `color` | `string` | `"primary"` | Button color token (`"primary"`, `"secondary"`, `"success"`, `"error"`, `"warning"`). |
+| `variant` | `string` | `"text"` | Button variant (`"contained"`, `"outlined"`, `"text"`, `"tonal"`, `"plain"`). |
+| `size` | `string` | `"xs"` | Button size (`"xs"`, `"sm"`, `"md"`, `"lg"`, `"xl"`). |
+
+> **Data format:** The column value should be a JSON-encoded array of file objects. Each file object should have `url` (the file URL for viewing) and either `display_name` or `name` (used for the button label and tooltip). If the column value is an empty array or null, a dash (`-`) is displayed.
+
+**Compact icon-only buttons (good for narrow columns):**
+
+```json
+"docButton": {
+    "displayLabel": false,
+    "columnView": false
+}
+```
+
+**Labeled buttons stacked vertically (good for showing file names):**
+
+```json
+"docButton": {
+    "displayLabel": true,
+    "columnView": true
+}
+```
 
 ### Custom Columns
 

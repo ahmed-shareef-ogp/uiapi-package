@@ -2156,8 +2156,21 @@ class ComponentConfigService
         // Build response with component key and validation warnings
         $response = [
             'component' => $viewKey,
-            'componentSettings' => $components,
         ];
+
+        // Include lang at view level when the view is locked to a single language
+        // that differs from the requested language.
+        $lang = (string) ($request->query('lang') ?? 'dv');
+        $viewLangs = $viewBlock['lang'] ?? [];
+        if (is_string($viewLangs)) {
+            $viewLangs = [$viewLangs];
+        }
+        $viewLangs = array_values(array_unique(array_map('strval', $viewLangs)));
+        if (count($viewLangs) === 1 && strtolower($viewLangs[0]) !== strtolower($lang)) {
+            $response['lang'] = $viewLangs[0];
+        }
+
+        $response['componentSettings'] = $components;
 
         if ($validationWarnings !== null) {
             $response['_validation_warnings'] = $validationWarnings;
@@ -2396,10 +2409,22 @@ class ComponentConfigService
     {
         $this->logDebug('Entering isLangAllowedForComponent', ['method' => __METHOD__, 'lang' => $lang]);
         $allowedLangs = $compBlock['lang'] ?? null;
+        if ($allowedLangs === null) {
+            return false;
+        }
+        if (is_string($allowedLangs)) {
+            $allowedLangs = [$allowedLangs];
+        }
         if (! is_array($allowedLangs) || empty($allowedLangs)) {
             return false;
         }
         $allowedNormalized = array_values(array_unique(array_map(fn ($l) => strtolower((string) $l), $allowedLangs)));
+
+        // When only one language is defined, allow the request through
+        // so the response can include the lang override for the frontend.
+        if (count($allowedNormalized) === 1) {
+            return true;
+        }
 
         return in_array(strtolower($lang), $allowedNormalized, true);
     }
