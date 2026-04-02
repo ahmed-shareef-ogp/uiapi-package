@@ -6,7 +6,7 @@ return [
 
     // Prefix for API routes provided by this package
     'route_prefix' => 'api',
-    'logging_enabled' => true,
+    'logging_enabled' => false,
 
     // Debug level for error messages:
     //   0 = minimal (generic error messages)

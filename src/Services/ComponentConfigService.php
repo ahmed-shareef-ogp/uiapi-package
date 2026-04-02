@@ -1376,9 +1376,6 @@ class ComponentConfigService
                     if (! is_array($leafDef)) {
                         $leafDef = [];
                     }
-                    if (! $this->columnSupportsLang($leafDef, $lang)) {
-                        continue;
-                    }
                 }
 
                 $key = is_array($leafDef) && ! empty($leafDef) ? $this->keyFor($leafDef, $rest) : $token;
@@ -1464,19 +1461,13 @@ class ComponentConfigService
             }
             if ($key === 'fields') {
                 if ($val === 'on') {
-                        $out['fields'] = $this->processLangInPayload(
-                            $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang, $modelInstance),
-                            $lang
-                        );
+                    $out['fields'] = $this->buildFormFieldsFromSchema($columnsSchema, $columnsSubsetNormalized, $lang, $modelInstance);
                 } elseif ($val !== 'off') {
                     if (is_array($val)) {
                         if (array_is_list($val)) {
                             $val = $this->filterListByLang($val, $lang);
                         }
-                            $out['fields'] = $this->processLangInPayload(
-                                $this->buildSectionPayload($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $modelInstance, $columnCustomizations, $allowedFilters),
-                                $lang
-                            );
+                        $out['fields'] = $this->buildSectionPayload($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $modelInstance, $columnCustomizations, $allowedFilters);
                     } else {
                         $out['fields'] = $val;
                     }
@@ -2897,7 +2888,32 @@ class ComponentConfigService
                         }
                         $merged[] = $existing ? array_merge($existing, $ov) : $ov;
                     }
-                        $sectionPayload[$targetKey] = $this->processLangInPayload($merged, $lang);
+                    // Filter fields by enabledLang: remove fields whose enabledLang
+                    // does not include the requested language. Fields without enabledLang
+                    // are always included.
+                    $merged = array_values(array_filter($merged, function (array $field) use ($lang): bool {
+                        if (! array_key_exists('enabledLang', $field)) {
+                            return true;
+                        }
+                        $enabled = $field['enabledLang'];
+                        if (is_string($enabled)) {
+                            return strtolower($enabled) === strtolower($lang);
+                        }
+                        if (is_array($enabled)) {
+                            return in_array(strtolower($lang), array_map('strtolower', $enabled), true);
+                        }
+
+                        return true;
+                    }));
+
+                    // Strip enabledLang from output — frontend doesn't need it
+                    $merged = array_map(function (array $field): array {
+                        unset($field['enabledLang']);
+
+                        return $field;
+                    }, $merged);
+
+                    $sectionPayload[$targetKey] = $merged;
 
                     continue;
                 }
@@ -2923,7 +2939,7 @@ class ComponentConfigService
                         $merged[] = $ov;
                     }
                 }
-                $sectionPayload[$targetKey] = $this->filterListByLang($merged, $lang);
+                $sectionPayload[$targetKey] = $merged;
 
                 continue;
             }

@@ -22,6 +22,7 @@ Route::prefix(config('uiapi.route_prefix', 'api'))
         // Generic API endpoints
         Route::get('gapi/{model}', [GenericApiController::class, 'index']);
         Route::get('gapi/{model}/{id}', [GenericApiController::class, 'show']);
+        Route::post('gapi/{model}/{id}', [GenericApiController::class, 'show']);
         Route::post('gapi/{model}', [GenericApiController::class, 'store']);
         Route::put('gapi/{model}/{id}', [GenericApiController::class, 'update']);
         Route::delete('gapi/{model}/{id}', [GenericApiController::class, 'destroy']);
@@ -29,7 +30,7 @@ Route::prefix(config('uiapi.route_prefix', 'api'))
         Route::post('upload', function (Request $request) {
             // Log all form data
             \Log::info('Upload form data received:', $request->all());
-            
+
             // Log files if any
             if ($request->hasFile('file')) {
                 \Log::info('Files uploaded:', [
@@ -43,11 +44,10 @@ Route::prefix(config('uiapi.route_prefix', 'api'))
                     })->toArray()
                 ]);
             }
-            
+
             return response()->json([
                 'message' => 'Upload data logged successfully',
                 'data_received' => $request->all()
             ]);
         });
     });
-
