@@ -14,6 +14,11 @@ return [
     //   2 = verbose (includes line number, column, and surrounding context)
     'debug_level' => 2,
 
+    // When true, models that have a UUID column will reject show/update/destroy
+    // requests made with an integer ID — only UUID-based lookups are accepted.
+    // Default: false (both integer ID and UUID are accepted)
+    'enforce_uuid' => true,
+
     // Allow arbitrary custom keys in component overrides (view configs)
     // When true, unknown keys like 'variables' under a component will be passed through into payloads.
     // Default: false (ignore unknown keys in overrides)

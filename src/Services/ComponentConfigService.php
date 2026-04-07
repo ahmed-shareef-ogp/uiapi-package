@@ -53,6 +53,7 @@ class ComponentConfigService
         'align',
         'emptyText',
         'labelKey',
+        'itemTitle'
     ];
 
     public function __construct()

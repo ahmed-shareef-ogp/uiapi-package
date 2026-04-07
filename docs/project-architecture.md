@@ -175,7 +175,7 @@ public static function apiSchema(): array
 
 ### Configuration
 
-- `config/uiapi.php` (published from package) — controls view config path, route prefix, debug level, logging
+- `config/uiapi.php` (published from package) — controls view config path, route prefix, debug level, logging, and UUID enforcement (`enforce_uuid`)
 - `Model::unguard()` enabled globally in `AppServiceProvider`
 
 ---
@@ -209,7 +209,7 @@ This is the **engine** of the schema-driven system. It provides:
 | `src/Services/ModelGeneratorService.php` | Parses migrations/SQL to generate models + view configs |
 | `src/Services/ViewConfigValidator.php` | Validates view config structure (errors + warnings) |
 | `src/Services/ComponentConfigs/*.json` | Component templates (table.json, form.json, toolbar.json, filterSection.json, meta.json) |
-| `config/uiapi.php` | Package configuration (paths, prefix, debug level) |
+| `config/uiapi.php` | Package configuration (paths, prefix, debug level, UUID enforcement) |
 | `routes/api.php` | Defines `/ccs/{model}` and `/gapi/{model}` routes |
 
 ### API Routes (registered by the package)
@@ -222,6 +222,8 @@ POST   /api/gapi/{model}        → GenericApiController@store
 PUT    /api/gapi/{model}/{id}   → GenericApiController@update
 DELETE /api/gapi/{model}/{id}   → GenericApiController@destroy
 ```
+
+> **`{id}` accepts integer ID or UUID.** For models with a `uuid` column, passing the UUID is preferred. When `enforce_uuid: true` is set in `config/uiapi.php`, integer ID lookups are rejected with a `404` for UUID-enabled models — only UUID-based requests are accepted.
 
 ### GAPI Query Parameters
 
