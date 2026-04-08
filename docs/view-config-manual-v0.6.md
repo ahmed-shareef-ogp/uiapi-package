@@ -312,6 +312,18 @@ Default number of rows per page. Overridable at request time via query parameter
 
 Default if omitted: `25`.
 
+#### `sort` (string)
+
+Default sort order applied to the auto-generated `datalink` URL. Uses the same format as the GAPI `?sort=` query parameter: a comma-separated list of column names, where a `-` prefix means descending.
+
+```json
+"sort": "-updated_at,created_at"
+```
+
+This appends `&sort=-updated_at,created_at` to the generated datalink, so the initial data fetch returns pre-sorted results. If omitted, no `sort` parameter is added and the API returns results in default database order.
+
+> **Note:** This key is consumed internally by CCS — it is not passed through to the output payload. It only affects the `datalink` URL.
+
 #### `actions` (object)
 
 Controls which CRUD action buttons appear for each row and under what conditions.
@@ -1101,6 +1113,16 @@ Default card page size used when pagination is enabled.
 ```
 
 Default if omitted: `25`.
+
+#### `sort` (string)
+
+Default sort order appended to the auto-generated `datalink` URL. Same format as the GAPI `?sort=` parameter: comma-separated columns, `-` prefix for descending.
+
+```json
+"sort": "-updated_at,created_at"
+```
+
+If omitted, no `sort` parameter is added to the datalink.
 
 #### `datalink` (`"on"` | `"off"` | `string`)
 

@@ -37,6 +37,7 @@ class ComponentConfigService
         'per_page',
         'filters',
         'lang',
+        'sort',
     ];
 
     /**
@@ -867,6 +868,9 @@ class ComponentConfigService
 
             // Build the section payload from base component config first
             $baseConfig = $componentConfig[$componentKey] ?? [];
+            if (isset($compBlock['sort']) && is_string($compBlock['sort'])) {
+                $baseConfig['sort'] = $compBlock['sort'];
+            }
             $componentPayload = $this->buildSectionPayload(
                 $baseConfig,
                 $columnsSchema,
@@ -1217,7 +1221,8 @@ class ComponentConfigService
         string $lang,
         string $modelName,
         int $perPage,
-        ?Model $modelInstance = null
+        ?Model $modelInstance = null,
+        ?string $sort = null
     ): string {
         $baseTokens = [];
         if (is_array($columnsSubsetNormalized) && ! empty($columnsSubsetNormalized)) {
@@ -1259,6 +1264,10 @@ class ComponentConfigService
             $query .= '&with='.implode(',', $withSegments);
         }
         $query .= '&per_page='.$perPage;
+
+        if (! empty($sort)) {
+            $query .= '&sort='.$sort;
+        }
 
         return $base.'?'.$query;
     }
@@ -1552,7 +1561,8 @@ class ComponentConfigService
                         $lang,
                         $modelName,
                         $perPage,
-                        $modelInstance
+                        $modelInstance,
+                        $node['sort'] ?? null
                     );
                 } elseif ($val !== 'off') {
                     $out['datalink'] = $val;
@@ -1684,6 +1694,12 @@ class ComponentConfigService
 
             if (isset($configFile[$key]) && is_array($configFile[$key])) {
                 $sectionCfg = $configFile[$key];
+                $override = (is_array($componentsOverrides) && array_key_exists($key, $componentsOverrides))
+                    ? $componentsOverrides[$key]
+                    : null;
+                if (is_array($override) && isset($override['sort']) && is_string($override['sort'])) {
+                    $sectionCfg['sort'] = $override['sort'];
+                }
                 $payload = $this->buildSectionPayload(
                     $sectionCfg,
                     $columnsSchema,
@@ -1696,14 +1712,11 @@ class ComponentConfigService
                     $allowedFilters
                 );
 
-                if (is_array($componentsOverrides) && array_key_exists($key, $componentsOverrides)) {
-                    $override = $componentsOverrides[$key];
-                    if (is_array($override)) {
-                        if ($key === 'card' && isset($override['cardLayout']) && is_array($override['cardLayout'])) {
-                            $override['cardLayout'] = $this->enrichCardLayoutFromSchema($override['cardLayout'], $columnsSchema);
-                        }
-                        $payload = $this->applyOverridesToSection($payload, $override, $lang);
+                if (is_array($override)) {
+                    if ($key === 'card' && isset($override['cardLayout']) && is_array($override['cardLayout'])) {
+                        $override['cardLayout'] = $this->enrichCardLayoutFromSchema($override['cardLayout'], $columnsSchema);
                     }
+                    $payload = $this->applyOverridesToSection($payload, $override, $lang);
                 }
 
                 $componentSettings[$key] = $payload;

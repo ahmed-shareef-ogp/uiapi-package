@@ -272,6 +272,7 @@ Each key inside `components` is processed against a template and then receives o
 |---|---|---|
 | `columns` | `string[]` | Override root-level columns for this component only |
 | `columnCustomizations` | `object` | Override/extend root-level customizations for this component |
+| `sort` | `string` | Default sort appended to the datalink URL (e.g. `"-updated_at,created_at"`) |
 | `buttons` | `string[]` | Filter template buttons to only these types |
 | `actionButtons` | `string[]` | Custom action button list |
 | `functions` | `object` | External JS function map (see [External JS Functions](#external-js-functions)) |
@@ -850,6 +851,7 @@ return [
   "listView": {
     "components": {
       "table": {
+        "sort": "-updated_at,created_at",
         "columns": ["id", "uuid", "ref_num", "summary", "status", "createdby.first_name_div"],
         "columnCustomizations": {
           "New_ref": {
