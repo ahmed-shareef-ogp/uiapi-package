@@ -712,10 +712,23 @@ class ComponentConfigService
      * Filter column tokens by language support.
      * Model mode resolves relation schemas via the model; noModel checks columnsSchema directly.
      */
-    protected function filterTokensByLangSupport(?Model $modelInstance, array $columnsSchema, array $tokens, string $lang): array
+    protected function filterTokensByLangSupport(?Model $modelInstance, array $columnsSchema, array $tokens, string $lang, ?array $columnCustomizations = null): array
     {
         $out = [];
         foreach ($tokens as $token) {
+            // Check if columnCustomizations override the lang for this token
+            $customLang = is_array($columnCustomizations) ? ($columnCustomizations[$token]['lang'] ?? null) : null;
+
+            if ($customLang !== null) {
+                // Normalize to array format for columnSupportsLang
+                $effectiveDef = ['lang' => is_array($customLang) ? $customLang : [$customLang]];
+                if ($this->columnSupportsLang($effectiveDef, $lang)) {
+                    $out[] = $token;
+                }
+
+                continue;
+            }
+
             if (Str::contains($token, '.')) {
                 if ($modelInstance instanceof Model) {
                     $resolved = $this->resolveRelationColumnDef($token, $columnsSchema, $modelInstance);
@@ -849,11 +862,11 @@ class ComponentConfigService
             }
         }
 
-        $effectiveTokens = $this->filterTokensByLangSupport($modelInstance, $columnsSchema, $columnsSubsetNormalized ?? [], $lang);
-
         $component = (string) ($resolvedComp['componentKey'] ?? '');
         $columnCustomizations = $this->getColumnCustomizationsFromComponent($compBlock);
         $allowedFilters = $this->getAllowedFiltersFromComponent($compBlock);
+
+        $effectiveTokens = $this->filterTokensByLangSupport($modelInstance, $columnsSchema, $columnsSubsetNormalized ?? [], $lang, $columnCustomizations);
 
         // If this is a direct component request (not a view), build and return the component payload
         if ($componentParam && ! $viewParam) {
@@ -1055,7 +1068,7 @@ class ComponentConfigService
             $fields = array_keys($columnsSchema);
         }
 
-        $fields = $this->filterTokensByLangSupport($modelInstance, $columnsSchema, $fields, $lang);
+        $fields = $this->filterTokensByLangSupport($modelInstance, $columnsSchema, $fields, $lang, $columnCustomizations);
 
         $headers = [];
         foreach ($fields as $token) {
@@ -1222,7 +1235,8 @@ class ComponentConfigService
         string $modelName,
         int $perPage,
         ?Model $modelInstance = null,
-        ?string $sort = null
+        ?string $sort = null,
+        ?array $columnCustomizations = null
     ): string {
         $baseTokens = [];
         if (is_array($columnsSubsetNormalized) && ! empty($columnsSubsetNormalized)) {
@@ -1230,7 +1244,7 @@ class ComponentConfigService
         } else {
             $baseTokens = array_keys($columnsSchema);
         }
-        $tokens = $this->filterTokensByLangSupport($modelInstance, $columnsSchema, $baseTokens, $lang);
+        $tokens = $this->filterTokensByLangSupport($modelInstance, $columnsSchema, $baseTokens, $lang, $columnCustomizations);
 
         $relationFields = [];
         foreach ($tokens as $token) {
@@ -1562,7 +1576,8 @@ class ComponentConfigService
                         $modelName,
                         $perPage,
                         $modelInstance,
-                        $node['sort'] ?? null
+                        $node['sort'] ?? null,
+                        $columnCustomizations
                     );
                 } elseif ($val !== 'off') {
                     $out['datalink'] = $val;
