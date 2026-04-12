@@ -1137,7 +1137,7 @@ class ComponentConfigService
 
         // Append custom columns from columnCustomizations that are not in the schema
         if (is_array($columnCustomizations)) {
-            $headers = $this->appendCustomHeaders($headers, $columnCustomizations, $lang);
+            $headers = $this->appendCustomHeaders($headers, $columnCustomizations, $lang, $columnsSchema);
         }
 
         $headers = $this->reorderHeadersByCustomOrder($headers, $columnCustomizations);
@@ -1148,7 +1148,7 @@ class ComponentConfigService
     /**
      * Append custom header columns defined in columnCustomizations but not in the schema.
      */
-    protected function appendCustomHeaders(array $headers, array $columnCustomizations, string $lang): array
+    protected function appendCustomHeaders(array $headers, array $columnCustomizations, string $lang, array $columnsSchema = []): array
     {
         $existingKeys = array_map(fn (array $h) => $h['value'] ?? '', $headers);
 
@@ -1157,6 +1157,12 @@ class ComponentConfigService
                 continue;
             }
             if (! is_array($custProps)) {
+                continue;
+            }
+
+            // Check language support: prefer lang from customization, fall back to schema
+            $custLang = $custProps['lang'] ?? ($columnsSchema[$custKey]['lang'] ?? null);
+            if (is_array($custLang) && ! $this->columnSupportsLang(['lang' => $custLang], $lang)) {
                 continue;
             }
 

@@ -334,13 +334,14 @@ class GenericApiController extends BaseController
                             $relatedData = $response->json();
 
                             // Keep keys as in 'fields' mapping
-                            $mapped = [];
-                            foreach (($config['fields'] ?? []) as $keyInOutput => $dbField) {
-                                $mapped[$keyInOutput] = $relatedData[$dbField] ?? null;
-                            }
+                            // $mapped = [];
+                            // foreach (($config['fields'] ?? []) as $keyInOutput => $dbField) {
+                            //     $mapped[$keyInOutput] = $relatedData[$dbField] ?? null;
+                            // }
 
                             // Attach mapped data to main record
-                            $record->setAttribute($relation, $mapped);
+                            // $record->setAttribute($relation, $mapped);
+                            $record->setAttribute($relation, $relatedData);
                         }
                     } catch (\Exception $e) {
                         Log::warning("Failed to fetch related data from {$url}: ".$e->getMessage());
