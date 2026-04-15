@@ -54,7 +54,8 @@ class ComponentConfigService
         'align',
         'emptyText',
         'labelKey',
-        'itemTitle'
+        'itemTitle',
+        'subtitle'
     ];
 
     public function __construct()
