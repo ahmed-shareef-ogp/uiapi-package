@@ -57,15 +57,18 @@ class GenericApiController extends BaseController
             ],
             'created' => [
                 'dv' => 'ރެކޯޑް ސޭވްކުރެވިއްޖެ!',
-                'en' => "{$modelBaseName} created successfully.",
+                // 'en' => "{$modelBaseName} created successfully.",
+                'en' => "Request created successfully.",
             ],
             'updated' => [
                 'dv' => 'ރެކޯޑު އަޕްޑޭޓް ކުރެވިއްޖެ!',
-                'en' => "{$modelBaseName} updated successfully.",
+                // 'en' => "{$modelBaseName} updated successfully.",
+                'en' => "Record updated successfully.",
             ],
             'deleted' => [
                 'dv' => 'ރެކޯޑު ފުހެލެވިއްޖެ!',
-                'en' => "{$modelBaseName} deleted successfully.",
+                // 'en' => "{$modelBaseName} deleted successfully.",
+                'en' => "Record deleted successfully.",
             ],
             'unable_save' => [
                 'dv' => 'މައްސަލައެއް ދިމާވެއްޖެ - ރެކޯޑު ސޭވެއް ނުކުރެވުނު!',
