@@ -1,10 +1,9 @@
 {
   "record": {
     "fields": "on",
-    "rules": "on",
-    "crudLink": "on",
-    "createLink": "on",
-    "updateLink": "on",
+    "crudLink": "off",
+    "createLink": "off",
+    "updateLink": "off",
     "showLink": "on",
     "numberOfColumns": 3
   }
