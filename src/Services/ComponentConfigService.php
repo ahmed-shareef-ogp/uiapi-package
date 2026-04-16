@@ -1154,7 +1154,7 @@ class ComponentConfigService
         $existingKeys = array_map(fn (array $h) => $h['value'] ?? '', $headers);
 
         foreach ($columnCustomizations as $custKey => $custProps) {
-            if (in_array($custKey, $existingKeys, true)) {
+            if (in_array($custKey, $existingKeys, true) || array_key_exists($custKey, $columnsSchema)) {
                 continue;
             }
             if (! is_array($custProps)) {
