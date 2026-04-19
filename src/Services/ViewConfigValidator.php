@@ -70,8 +70,8 @@ class ViewConfigValidator
 
             if (str_contains($key, 'View')) {
                 $views[$key] = $block;
-            } elseif ($key === 'columnsSchema') {
-                // Root-level columnsSchema — skip, not a component
+            } elseif ($key === 'columnsSchema' || $key === 'columnCustomizations') {
+                // Root-level columnsSchema / columnCustomizations — skip, not a component
                 continue;
             } else {
                 $components[$key] = $block;

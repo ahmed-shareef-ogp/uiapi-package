@@ -41,6 +41,32 @@ class ComponentConfigService
     ];
 
     /**
+     * Preferred key order for direct component response payloads.
+     * Keys not listed here appear after the listed ones, before _validation_warnings.
+     *
+     * @var array<int, string>
+     */
+    protected array $sectionKeyOrder = [
+        'component',
+        'showActions',
+        'actions',
+        'actionButtons',
+        'button',
+        'crudLink',
+        'createLink',
+        'updateLink',
+        'showLink',
+        'datalink',
+        'delete',
+        'fields',
+        'filters',
+        'functions',
+        'headers',
+        'pagination',
+        '_validation_warnings',
+    ];
+
+    /**
      * Payload keys that may be defined as {dv,en} and should be collapsed
      * down to the request language.
      *
@@ -347,9 +373,7 @@ class ComponentConfigService
             if ($k === 'title' || $k === 'value' || $k === 'order') {
                 continue;
             }
-            if (! array_key_exists($k, $header)) {
-                $header[$k] = $v;
-            }
+            $header[$k] = $v;
         }
 
         return $header;
@@ -385,6 +409,15 @@ class ComponentConfigService
             $override = $this->pickHeaderLangOverride($def, $lang);
             if ($override !== null) {
                 $header['lang'] = $override;
+            }
+
+            // Forward any unhandled custom keys from the schema definition
+            $handledKeys = ['key', 'sortable', 'hidden', 'type', 'displayType', 'inlineEditable', 'lang', 'formField', 'displayProps'];
+            foreach ($def as $k => $v) {
+                if (in_array($k, $handledKeys, true) || array_key_exists($k, $header)) {
+                    continue;
+                }
+                $header[$k] = $v;
             }
         }
 
@@ -918,7 +951,7 @@ class ComponentConfigService
                 $response['_validation_warnings'] = $validationWarnings;
             }
 
-            return response()->json($response);
+            return response()->json($this->orderComponentPayload($response));
         }
 
         // Build component settings
@@ -2283,6 +2316,17 @@ class ComponentConfigService
         // Resolve columnsSchema from root-level if component uses a reference or has none
         $compBlock = $this->resolveColumnsSchemaFromRootConfig($compBlock, $viewCfg);
 
+        // Inherit and merge columnCustomizations from root-level view if available
+        $rootCustomizations = $this->findColumnCustomizationsFromViews($viewCfg, $targetModel, $targetComponent);
+        if (is_array($rootCustomizations) && ! empty($rootCustomizations)) {
+            $localCustomizations = $compBlock['columnCustomizations'] ?? null;
+            if (is_array($localCustomizations) && ! empty($localCustomizations)) {
+                $compBlock['columnCustomizations'] = array_replace_recursive($rootCustomizations, $localCustomizations);
+            } else {
+                $compBlock['columnCustomizations'] = $rootCustomizations;
+            }
+        }
+
         if (! $columnsParam) {
             $compColumns = $this->getColumnsForComponent($compBlock, 'table');
             if (is_array($compColumns) && ! empty($compColumns)) {
@@ -2434,6 +2478,44 @@ class ComponentConfigService
                 // If this view references our component, return its lang
                 if ($refTarget === $targetComponent && isset($block['lang']) && is_array($block['lang'])) {
                     return $block['lang'];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Find columnCustomizations from views that reference this component.
+     */
+    protected function findColumnCustomizationsFromViews(array $viewCfg, string $targetModel, string $targetComponent): ?array
+    {
+        foreach ($viewCfg as $key => $block) {
+            if (! str_contains($key, 'View') || ! is_array($block)) {
+                continue;
+            }
+
+            $components = $block['components'] ?? null;
+            if (! is_array($components)) {
+                continue;
+            }
+
+            foreach ($components as $reference) {
+                $refTarget = $reference;
+                if (str_contains($reference, '/')) {
+                    [$refModel, $refComponent] = explode('/', $reference, 2);
+                    if (strtolower($refModel) === strtolower($targetModel) && $refComponent === $targetComponent) {
+                        $refTarget = $targetComponent;
+                    } else {
+                        continue;
+                    }
+                }
+
+                if ($refTarget === $targetComponent) {
+                    $customizations = $block['columnCustomizations'] ?? null;
+                    if (is_array($customizations) && ! empty($customizations)) {
+                        return $customizations;
+                    }
                 }
             }
         }
@@ -2815,6 +2897,55 @@ class ComponentConfigService
         }
 
         return null;
+    }
+
+    /**
+     * Order a direct component response payload:
+     * - Top-level keys follow $sectionKeyOrder, unlisted keys come before _validation_warnings
+     * - Each header object's keys are sorted alphabetically
+     */
+    protected function orderComponentPayload(array $response): array
+    {
+        $ordered = [];
+        $warnings = null;
+
+        // Place keys in defined order
+        foreach ($this->sectionKeyOrder as $key) {
+            if ($key === '_validation_warnings') {
+                continue; // handled last
+            }
+            if (array_key_exists($key, $response)) {
+                $ordered[$key] = $response[$key];
+            }
+        }
+
+        // Append any keys not in the predefined list
+        foreach ($response as $key => $value) {
+            if ($key === '_validation_warnings') {
+                $warnings = $value;
+
+                continue;
+            }
+            if (! array_key_exists($key, $ordered)) {
+                $ordered[$key] = $value;
+            }
+        }
+
+        // Sort keys inside each header object alphabetically
+        if (isset($ordered['headers']) && is_array($ordered['headers'])) {
+            $ordered['headers'] = array_map(function (array $header): array {
+                ksort($header);
+
+                return $header;
+            }, $ordered['headers']);
+        }
+
+        // _validation_warnings always last
+        if ($warnings !== null) {
+            $ordered['_validation_warnings'] = $warnings;
+        }
+
+        return $ordered;
     }
 
     // ──────────────────────────────────────────────
