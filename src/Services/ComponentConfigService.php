@@ -2564,7 +2564,8 @@ class ComponentConfigService
 
     public function loadComponentConfig(string $componentSettingsKey): array
     {
-        $path = __DIR__.'/ComponentConfigs/'.basename($componentSettingsKey).'.json';
+        $canonical = $this->canonicalComponentName($componentSettingsKey);
+        $path = __DIR__.'/ComponentConfigs/'.basename($canonical).'.json';
         if (! File::exists($path)) {
             return [];
         }
