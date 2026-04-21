@@ -905,6 +905,7 @@ class ComponentConfigService
         // If this is a direct component request (not a view), build and return the component payload
         if ($componentParam && ! $viewParam) {
             $componentKey = $resolvedComp['componentKey'] ?? $componentParam;
+            $canonicalKey = $this->canonicalComponentName($componentKey);
             $componentConfig = $this->loadComponentConfig($componentKey);
 
             if (empty($componentConfig)) {
@@ -914,7 +915,7 @@ class ComponentConfigService
             }
 
             // Build the section payload from base component config first
-            $baseConfig = $componentConfig[$componentKey] ?? [];
+            $baseConfig = $componentConfig[$canonicalKey] ?? [];
             if (isset($compBlock['sort']) && is_string($compBlock['sort'])) {
                 $baseConfig['sort'] = $compBlock['sort'];
             }
@@ -933,7 +934,7 @@ class ComponentConfigService
             // Enrich card stacks from columnsSchema before overrides are applied,
             // so processLangInPayload inside applyOverridesToSection can use
             // inherited lang values for filtering and then strip them.
-            if ($componentKey === 'card' && is_array($compBlock) && isset($compBlock['cardLayout']) && is_array($compBlock['cardLayout'])) {
+            if ($canonicalKey === 'card' && is_array($compBlock) && isset($compBlock['cardLayout']) && is_array($compBlock['cardLayout'])) {
                 $compBlock['cardLayout'] = $this->enrichCardLayoutFromSchema($compBlock['cardLayout'], $columnsSchema);
             }
 
@@ -946,7 +947,7 @@ class ComponentConfigService
             $componentPayload = $this->collapseLocalizedKeys($componentPayload, $lang);
 
             // Build response with component key and validation warnings
-            $response = array_merge(['component' => $componentKey], $componentPayload);
+            $response = array_merge(['component' => $canonicalKey], $componentPayload);
             if ($validationWarnings !== null) {
                 $response['_validation_warnings'] = $validationWarnings;
             }
@@ -1746,9 +1747,10 @@ class ComponentConfigService
             if (empty($configFile)) {
                 continue;
             }
+            $canonicalKey = $this->canonicalComponentName($key);
 
-            if (isset($configFile[$key]) && is_array($configFile[$key])) {
-                $sectionCfg = $configFile[$key];
+            if (isset($configFile[$canonicalKey]) && is_array($configFile[$canonicalKey])) {
+                $sectionCfg = $configFile[$canonicalKey];
                 $override = (is_array($componentsOverrides) && array_key_exists($key, $componentsOverrides))
                     ? $componentsOverrides[$key]
                     : null;
