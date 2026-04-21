@@ -2885,7 +2885,7 @@ class ComponentConfigService
         if (! is_array($custom)) {
             return null;
         }
-        $title = $custom['title'] ?? null;
+        $title = $custom['title'] ?? $custom['label'] ?? null;
         if ($title === null) {
             return null;
         }
