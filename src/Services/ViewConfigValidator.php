@@ -433,6 +433,7 @@ class ViewConfigValidator
             }
             $custPrefix = "{$prefix}.columnCustomizations.{$colKey}";
 
+            $this->ruleLabelStructure($custProps, $custPrefix);
             $this->ruleDisplayTypeRequiresMatchingSubKey($custProps, $custPrefix);
             $this->ruleSelectInputTypeRequiresSelectConfig($custProps, $custPrefix);
         }
@@ -455,6 +456,7 @@ class ViewConfigValidator
             }
             $colPrefix = "{$prefix}.columnsSchema.{$colKey}";
 
+            $this->ruleLabelStructure($colDef, $colPrefix);
             $this->ruleSelectInputTypeRequiresSelectConfig($colDef, $colPrefix);
             $this->ruleDisplayTypeRequiresMatchingSubKey($colDef, $colPrefix);
         }
@@ -1123,6 +1125,31 @@ class ViewConfigValidator
                     "{$prefix}.components.{$alias}",
                     'component_config_exists',
                     "Component \"{$componentKey}\" (referenced as \"{$reference}\") does not have a matching config file in ComponentConfigs/. Expected: {$componentKey}.json"
+                );
+            }
+        }
+    }
+
+    /**
+     * RULE: "label" must be a string or a flat localized object, not double-nested.
+     */
+    protected function ruleLabelStructure(array $props, string $prefix): void
+    {
+        $label = $props['label'] ?? null;
+        if ($label === null || is_string($label)) {
+            return;
+        }
+        if (! is_array($label)) {
+            $this->addError("{$prefix}.label", 'invalid_type', '"label" must be a string or a localized object (e.g. {"en": "...", "dv": "..."}).');
+
+            return;
+        }
+        foreach ($label as $langKey => $value) {
+            if (is_array($value)) {
+                $this->addError(
+                    "{$prefix}.label.{$langKey}",
+                    'nested_label',
+                    "\"label.{$langKey}\" is an array but should be a string. Check for accidental double-nesting (e.g. \"label\": { \"label\": { ... } })."
                 );
             }
         }

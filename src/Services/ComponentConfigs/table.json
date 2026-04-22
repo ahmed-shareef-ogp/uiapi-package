@@ -9,7 +9,8 @@
     "actions":{
       "showView": true,
       "showEdit": true,
-      "showDelete": true
+      "showDelete": true,
+      "customButtons": []
     }
   }
 }

@@ -9,14 +9,14 @@
             },
             {
                 "type": "Clear",
-                "label": "x",
-                "appendIcon": "funnel",
+                "label": "buttons.clear",
+                "prependIcon": "x-mark",
                 "color": "secondary"
             },
             {
                 "type": "Close",
-                "prependIcon": "x-mark",
-                "label": "Close",
+                "prependIcon": "chevron-up",
+                "label": "buttons.close",
                 "color": "gray"
             }
         ],
