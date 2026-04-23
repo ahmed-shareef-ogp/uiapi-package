@@ -5,12 +5,11 @@
     "pagination": "on",
     "datalink": "on",
     "button": ["create", "edit", "delete"],
-    "showActions": true,
+    "showActions": false,
     "actions":{
-      "showView": true,
-      "showEdit": true,
-      "showDelete": true,
-      "customButtons": []
+      "showView": false,
+      "showEdit": false,
+      "showDelete": false
     }
   }
 }

@@ -3029,6 +3029,12 @@ class ComponentConfigService
                 continue;
             }
 
+            if (! array_is_list($original) && ! array_is_list($overrideVal)) {
+                $sectionPayload[$targetKey] = array_merge($original, $overrideVal);
+
+                continue;
+            }
+
             $allStrings = count($overrideVal) > 0;
             $hasAssoc = false;
             foreach ($overrideVal as $v) {
