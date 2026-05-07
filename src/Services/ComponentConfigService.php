@@ -2002,9 +2002,9 @@ class ComponentConfigService
             return [];
         }
         $json = File::get($path);
-        $cfg = json_decode($json, true);
-
-        if ($cfg === null && json_last_error() !== JSON_ERROR_NONE) {
+        try {
+            $cfg = \ColinODell\Json5\Json5Decoder::decode($json, true);
+        } catch (\Throwable $e) {
             throw new \InvalidArgumentException(
                 $this->buildJsonErrorMessage($modelName, $path, $json)
             );
@@ -2573,7 +2573,7 @@ class ComponentConfigService
         }
         $this->logDebug('Entering loadComponentConfig', ['method' => __METHOD__, 'key' => $componentSettingsKey]);
         $json = File::get($path);
-        $cfg = json_decode($json, true) ?: [];
+        $cfg = \ColinODell\Json5\Json5Decoder::decode($json, true) ?: [];
 
         return $cfg;
     }
