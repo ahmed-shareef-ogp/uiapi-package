@@ -10,6 +10,8 @@ use Illuminate\Support\Str;
 
 class ComponentConfigService
 {
+    protected ?AccessControlFilter $accessFilter = null;
+
     protected bool $includeHiddenColumnsInHeaders = false;
 
     protected bool $includeTopLevelHeaders = false;
@@ -38,6 +40,10 @@ class ComponentConfigService
         'filters',
         'lang',
         'sort',
+        'allowRoles',
+        'denyRoles',
+        'allowOrgs',
+        'denyOrgs',
     ];
 
     /**
@@ -796,6 +802,7 @@ class ComponentConfigService
     public function index(Request $request, string $modelName)
     {
         $this->logDebug('Entering index', ['method' => __METHOD__, 'model' => $modelName]);
+        $this->accessFilter = new AccessControlFilter($request);
 
         // Determine if this is a view request or component request
         $viewParam = $request->query('view');
@@ -1531,6 +1538,7 @@ class ComponentConfigService
                     if (is_array($val)) {
                         if (array_is_list($val)) {
                             $val = $this->filterListByLang($val, $lang);
+                            $val = $this->accessFilter->filterList($val);
                         }
                         $out['fields'] = $this->buildSectionPayload($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $modelInstance, $columnCustomizations, $allowedFilters);
                     } else {
@@ -1591,6 +1599,9 @@ class ComponentConfigService
                     }
                     $out['filters'] = $this->buildFilters($effectiveSchema, $modelName, $lang, $allowedFilters, $modelInstance);
                 } elseif ($val !== 'off') {
+                    if (\is_array($val) && array_is_list($val)) {
+                        $val = $this->accessFilter->filterList($val);
+                    }
                     $out['filters'] = $val;
                 }
 
@@ -1642,6 +1653,7 @@ class ComponentConfigService
             if (is_array($val)) {
                 if (array_is_list($val)) {
                     $val = $this->filterListByLang($val, $lang);
+                    $val = $this->accessFilter->filterList($val);
                 }
                 $out[$key] = $this->buildSectionPayload($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $modelInstance, $columnCustomizations, $allowedFilters);
             } else {
@@ -2182,6 +2194,7 @@ class ComponentConfigService
     protected function handleViewRequest(Request $request, string $modelName, string $viewKey): mixed
     {
         $viewCfg = $this->loadViewConfig($modelName);
+        $viewCfg = $this->accessFilter->filterSections($viewCfg);
         if (empty($viewCfg)) {
             return response()->json(['error' => "View config file missing for model '{$modelName}'"], 422);
         }
@@ -2279,6 +2292,7 @@ class ComponentConfigService
         }
 
         $viewCfg = $this->loadViewConfig($targetModel);
+        $viewCfg = $this->accessFilter->filterSections($viewCfg);
         if (empty($viewCfg)) {
             throw new \InvalidArgumentException("View config file missing for model '{$targetModel}'");
         }

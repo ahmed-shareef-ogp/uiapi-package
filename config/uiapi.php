@@ -31,4 +31,22 @@ return [
     // 'model_bindings' => [
     //     'Person' => \Ogp\UiApi\Models\Person::class,
     // ],
+
+    // ── Access Control ────────────────────────────────────────────────────────
+
+    // Toggle role-based access filtering on view config sections, fields, and filters.
+    'access_control_roles' => true,
+
+    // Toggle org-based access filtering on view config sections, fields, and filters.
+    'access_control_orgs' => true,
+
+    // Callable: fn(Request $request): string[]
+    // Returns the current user's role names as an array of strings.
+    // If null, falls back to auth()->user()->roles (Collection or array) or ->role (string).
+    'roles_resolver' => null,
+
+    // Callable: fn(Request $request): ?string
+    // Returns the current user's org identifier as a string, or null.
+    // If null, falls back to auth()->user()->org_id or ->organization_id.
+    'org_resolver' => null,
 ];
