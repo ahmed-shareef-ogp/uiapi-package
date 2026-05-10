@@ -1654,6 +1654,8 @@ class ComponentConfigService
                 if (array_is_list($val)) {
                     $val = $this->filterListByLang($val, $lang);
                     $val = $this->accessFilter->filterList($val);
+                } elseif ($this->accessFilter?->canAccess($val) === false) {
+                    continue;
                 }
                 $out[$key] = $this->buildSectionPayload($val, $columnsSchema, $columnsSubsetNormalized, $lang, $perPage, $modelName, $modelInstance, $columnCustomizations, $allowedFilters);
             } else {

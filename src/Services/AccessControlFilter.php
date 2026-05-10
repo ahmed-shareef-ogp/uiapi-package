@@ -47,6 +47,19 @@ class AccessControlFilter
     }
 
     /**
+     * Check whether a single associative object passes access control.
+     * Used for nested objects (e.g. actions, delete) in buildSectionPayload.
+     */
+    public function canAccess(array $item): bool
+    {
+        if (! $this->rolesEnabled && ! $this->orgsEnabled) {
+            return true;
+        }
+
+        return $this->passes($item);
+    }
+
+    /**
      * Filter a sequential list (fields, filters) and strip access keys from each item.
      */
     public function filterList(array $list): array
