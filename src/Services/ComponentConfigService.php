@@ -2977,6 +2977,13 @@ class ComponentConfigService
             if (in_array($overrideKey, $this->internalKeys, true)) {
                 continue;
             }
+            // For associative object overrides: check access control and strip access keys
+            if (is_array($overrideVal) && ! array_is_list($overrideVal)) {
+                if ($this->accessFilter?->canAccess($overrideVal) === false) {
+                    continue;
+                }
+                unset($overrideVal['allowRoles'], $overrideVal['denyRoles'], $overrideVal['allowOrgs'], $overrideVal['denyOrgs']);
+            }
             if ($overrideKey === 'functions' && is_array($overrideVal)) {
                 $sectionPayload['functions'] = $this->resolveExternalFunctions($overrideVal);
 
