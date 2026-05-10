@@ -317,7 +317,10 @@ class GenericApiController extends BaseController
 
                     // Build the API URL dynamically from dataLink
                     $dataLink = rtrim($config['dataLink'] ?? '', '/');
-                    $url = "{$dataLink}/{$relation}/{$relatedId}";
+                    $searchColumn = $config['searchColumn'] ?? null;
+                    $url = $searchColumn
+                        ? "{$dataLink}/{$relation}/{$relatedId}?searchColumn={$searchColumn}"
+                        : "{$dataLink}/{$relation}/{$relatedId}";
                     $postBody = ['fields' => $config['fields'] ?? []];
 
                     // Log::info('Related data request', [
